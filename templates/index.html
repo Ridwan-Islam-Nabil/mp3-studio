@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MP3 Studio</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c3aed'/%3E%3Cstop offset='1' stop-color='%231d4ed8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='22' fill='url(%23g)'/%3E%3Ctext y='72' x='50' text-anchor='middle' font-size='62'%3E%F0%9F%8E%B5%3C/text%3E%3C/svg%3E">
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- WaveSurfer.js v7 (ESM – loaded in app.js as module) -->
+  <!-- Styles -->
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+
+<body>
+
+  <!-- ░░░ Ambient background orbs ░░░ -->
+  <div class="bg-orb orb-1" aria-hidden="true"></div>
+  <div class="bg-orb orb-2" aria-hidden="true"></div>
+  <div class="bg-orb orb-3" aria-hidden="true"></div>
+
+  <div class="app-shell">
+
+    <!-- ══════════════════════════════════════════════════
+         STEP 1 – URL INPUT
+    ═══════════════════════════════════════════════════ -->
+    <section id="step-input" class="step active" aria-label="Enter YouTube URL">
+
+      <!-- Hero -->
+      <header class="hero">
+        <div class="hero-logo" aria-hidden="true">
+          <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+            <circle cx="28" cy="28" r="28" fill="url(#logoGrad)"/>
+            <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle"
+                  font-size="28" fill="white">🎵</text>
+            <defs>
+              <linearGradient id="logoGrad" x1="0" y1="0" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#7c3aed"/>
+                <stop offset="1" stop-color="#1d4ed8"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <h1 class="hero-title">MP3 Studio</h1>
+        <p class="hero-sub">Download · Convert · Trim any audio from YouTube</p>
+      </header>
+
+      <!-- URL card -->
+      <div class="card url-card">
+
+        <!-- ── Source Tabs ─────────────────────────────────── -->
+        <div class="source-tabs" role="tablist">
+          <button type="button" class="source-tab active" id="tab-yt-btn" role="tab" aria-selected="true" aria-controls="tab-yt">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.27 6.27 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.69a8.18 8.18 0 0 0 4.78 1.52V6.76a4.85 4.85 0 0 1-1.01-.07z"/>
+            </svg>
+            YouTube Link
+          </button>
+          <button type="button" class="source-tab" id="tab-upload-btn" role="tab" aria-selected="false" aria-controls="tab-upload">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            Upload MP3
+          </button>
+        </div>
+
+        <!-- ══ TAB 1: YouTube ══════════════════════════════════ -->
+        <div id="tab-yt" class="tab-pane active" role="tabpanel">
+          <div class="url-row">
+            <div class="url-input-wrap">
+              <span class="url-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+              </span>
+              <input
+                id="url-input"
+                type="url"
+                placeholder="https://www.youtube.com/watch?v=..."
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button id="paste-btn" class="btn btn-ghost btn-sm" title="Paste from clipboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="2" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                Paste
+              </button>
+            </div>
+            <button id="fetch-btn" class="btn btn-primary">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              Fetch
+            </button>
+          </div>
+
+          <p id="url-error" class="field-error hidden" role="alert"></p>
+
+          <!-- Video preview -->
+          <div id="video-preview" class="video-preview hidden">
+            <div class="preview-divider"><span>Video found</span></div>
+            <div class="preview-inner">
+              <div class="preview-thumb-wrap">
+                <img id="preview-thumb" src="" alt="Thumbnail" loading="lazy" />
+                <span id="preview-duration-badge" class="duration-badge"></span>
+              </div>
+              <div class="preview-meta">
+                <h3 id="preview-title" class="preview-title"></h3>
+                <p id="preview-channel" class="preview-channel"></p>
+                <p id="preview-views" class="preview-views"></p>
+              </div>
+            </div>
+            <button id="download-btn" class="btn btn-primary btn-full">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Download &amp; Convert to MP3
+            </button>
+          </div>
+        </div>
+
+        <!-- ══ TAB 2: Upload MP3 ══════════════════════════════ -->
+        <div id="tab-upload" class="tab-pane hidden" role="tabpanel">
+
+          <!-- Drop zone -->
+          <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Upload audio file">
+            <input id="file-input" type="file" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.opus" hidden />
+            <div class="drop-icon" aria-hidden="true">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M9 18V5l12-2v13"/>
+                <circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+              </svg>
+            </div>
+            <p class="drop-title">Drag &amp; drop your audio file here</p>
+            <p class="drop-sub">or</p>
+            <button type="button" class="btn btn-secondary" id="browse-btn">Browse Files</button>
+            <p class="drop-formats">MP3 · WAV · M4A · AAC · OGG · FLAC · OPUS &nbsp;·&nbsp; Max 500 MB</p>
+          </div>
+
+          <p id="upload-error" class="field-error hidden" role="alert"></p>
+
+          <!-- File preview (shown after file selected) -->
+          <div id="file-preview" class="file-preview hidden">
+            <div class="preview-divider"><span>File ready</span></div>
+            <div class="file-preview-inner">
+              <div class="file-icon" aria-hidden="true">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M9 18V5l12-2v13"/>
+                  <circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+                </svg>
+              </div>
+              <div class="file-meta">
+                <p id="file-name" class="preview-title"></p>
+                <p id="file-size" class="preview-channel"></p>
+              </div>
+            </div>
+            <button id="open-editor-btn" class="btn btn-primary btn-full">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+              </svg>
+              Open in Waveform Editor
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Feature chips -->
+      <div class="feature-chips" aria-hidden="true">
+        <span class="chip">🎵 320 kbps</span>
+        <span class="chip">✂️ Multi-region trimming</span>
+        <span class="chip">↩ Undo / Redo</span>
+        <span class="chip">👁 Preview regions</span>
+        <span class="chip">💾 Choose save folder</span>
+        <span class="chip">📁 Upload local MP3</span>
+      </div>
+    </section>
+
+
+    <!-- ══════════════════════════════════════════════════
+         STEP 2 – DOWNLOAD PROGRESS
+    ═══════════════════════════════════════════════════ -->
+    <section id="step-progress" class="step hidden" aria-label="Download progress">
+      <div class="card progress-card">
+        <div class="progress-icon" aria-hidden="true">
+          <svg class="spin-ring" viewBox="0 0 64 64" width="72" height="72">
+            <circle cx="32" cy="32" r="28" stroke-width="4" stroke="rgba(124,58,237,.2)" fill="none"/>
+            <circle cx="32" cy="32" r="28" stroke-width="4" stroke="url(#spinGrad)" fill="none"
+                    stroke-dasharray="88" stroke-dashoffset="66" stroke-linecap="round"/>
+            <defs>
+              <linearGradient id="spinGrad" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#7c3aed"/><stop offset="1" stop-color="#06b6d4"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <h2 id="progress-message" class="progress-msg">Connecting…</h2>
+        <div class="progress-bar-track">
+          <div id="progress-fill" class="progress-bar-fill" style="width:0%"></div>
+        </div>
+        <p id="progress-pct" class="progress-pct">0%</p>
+        <button id="cancel-btn" class="btn btn-ghost btn-sm mt-lg">Cancel</button>
+      </div>
+    </section>
+
+
+    <!-- ══════════════════════════════════════════════════
+         STEP 3 – EDITOR
+    ═══════════════════════════════════════════════════ -->
+    <section id="step-editor" class="step hidden" aria-label="Audio editor">
+
+      <!-- ── Top bar ────────────────────────────────────────── -->
+      <div class="editor-topbar">
+        <div class="track-info">
+          <!-- Home button -->
+          <button id="new-session-btn" class="btn btn-ghost btn-icon-label home-btn" title="Back to Home (clears current session)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9.5z"/>
+              <polyline points="9 21 9 12 15 12 15 21"/>
+            </svg>
+            Home
+          </button>
+          <div class="divider-v"></div>
+          <img id="editor-thumb" src="" alt="" class="track-thumb" />
+          <div class="track-meta">
+            <p id="editor-title" class="track-title"></p>
+            <p id="editor-channel" class="track-channel"></p>
+          </div>
+        </div>
+
+        <div class="editor-controls">
+          <!-- Theme toggle -->
+          <button id="theme-toggle-btn" class="btn btn-ghost btn-icon" title="Switch to light mode">
+            <!-- Moon (dark mode active) -->
+            <svg class="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+            <!-- Sun (light mode active) -->
+            <svg class="theme-icon-light hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="12" cy="12" r="5"/>
+              <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+              <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+          </button>
+          <!-- Shortcut help -->
+          <button class="btn btn-ghost btn-icon" title="Keyboard shortcuts (?)"
+                  onclick="document.getElementById('shortcuts-modal').classList.remove('hidden')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          </button>
+          <div class="divider-v"></div>
+          <button id="undo-btn" class="btn btn-ghost btn-icon-label" disabled title="Undo (Ctrl+Z)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
+            </svg>
+            Undo
+          </button>
+          <button id="redo-btn" class="btn btn-ghost btn-icon-label" disabled title="Redo (Ctrl+Y)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/>
+            </svg>
+            Redo
+          </button>
+          <button id="reset-edits-btn" class="btn btn-ghost btn-icon-label" title="Reset all cuts (keeps audio loaded)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polyline points="1 4 1 10 7 10"/>
+              <path d="M3.51 15a9 9 0 1 0 .49-3.72"/>
+            </svg>
+            Reset
+          </button>
+          <div class="divider-v"></div>
+          <button id="add-region-btn" class="btn btn-danger btn-icon-label"
+                  title="Drop a 10-second cut region at the playhead — resize edges to adjust. Press N while listening to mark on the fly.">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <!-- Vertical cut line -->
+              <line x1="12" y1="3" x2="12" y2="21"/>
+              <!-- Left bracket -->
+              <polyline points="7 8 4 8 4 16 7 16"/>
+              <!-- Right bracket -->
+              <polyline points="17 8 20 8 20 16 17 16"/>
+            </svg>
+            Cut Here &nbsp;<kbd class="btn-kbd">N</kbd>
+          </button>
+          <div class="output-filename-wrap" title="Output filename (without .mp3)">
+            <svg class="output-filename-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            <input id="output-filename-input" type="text" class="output-filename-input"
+                   placeholder="Output filename" spellcheck="false" autocomplete="off" />
+          </div>
+          <button id="export-btn" class="btn btn-primary btn-icon-label" disabled title="Export MP3">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Export MP3
+          </button>
+        </div>
+      </div>
+
+      <!-- ── Waveform ──────────────────────────────────────── -->
+      <div class="waveform-card card">
+
+        <!-- Header: label · time readout · fullscreen -->
+        <div class="waveform-header">
+          <span class="waveform-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            Waveform
+          </span>
+
+          <!-- Stable time readout (cursor + playhead) -->
+          <div class="wf-time-bar" id="wf-time-bar">
+            <div class="wf-time-block">
+              <span class="wf-time-label">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                Cursor
+              </span>
+              <code class="wf-time-val" id="wf-cursor-time">—</code>
+            </div>
+            <div class="wf-time-sep-v"></div>
+            <div class="wf-time-block">
+              <span class="wf-time-label">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+                Playhead
+              </span>
+              <code class="wf-time-val wf-time-val--play" id="wf-playhead-time">0:00.000</code>
+            </div>
+          </div>
+
+          <button id="fullscreen-btn" class="btn btn-ghost btn-icon" title="Fullscreen waveform (F)">
+            <svg id="fs-expand-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
+              <path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+            </svg>
+            <svg id="fs-collapse-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="hidden">
+              <path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/>
+              <path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Minimap — full overview, stays un-zoomed -->
+        <div id="minimap-mount" class="minimap-mount"></div>
+
+        <!-- Timeline ruler at the top — stays in sync with waveform scroll -->
+        <div id="timeline-mount" class="timeline-mount"></div>
+
+        <!-- WaveSurfer waveform (wrapped for hover-cursor overlay) -->
+        <div class="waveform-mount-wrap">
+          <div id="waveform-mount" class="waveform-mount"></div>
+          <div id="wf-hover-cursor" class="wf-hover-cursor hidden" aria-hidden="true">
+            <div class="wf-hover-line"></div>
+            <div id="wf-hover-badge" class="wf-hover-badge">0:00.000</div>
+          </div>
+        </div>
+
+        <!-- Zoom bar — full-width slider at the bottom of the waveform card -->
+        <div class="zoom-bar">
+          <svg class="zoom-bar-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            <line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+          </svg>
+          <button id="zoom-out-btn" class="btn btn-ghost btn-icon zoom-step-btn" title="Zoom out">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8">
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
+          <div class="zoom-slider-wrap">
+            <input id="zoom-slider" type="range" min="1" max="2000" value="1"
+                   class="zoom-range" title="Zoom level" aria-label="Zoom level" />
+          </div>
+          <button id="zoom-in-btn" class="btn btn-ghost btn-icon zoom-step-btn" title="Zoom in">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
+          <button id="reset-zoom-btn" class="btn btn-ghost btn-sm zoom-fit-btn" title="Fit to view (reset zoom)">Fit</button>
+          <span id="zoom-level-badge" class="zoom-level-badge" title="Current zoom level">1×</span>
+        </div>
+
+        <p class="waveform-hint" id="waveform-hint">
+          <strong>Drag</strong> on the waveform to mark a part to <strong style="color:#ef4444">cut</strong>
+          &nbsp;·&nbsp; Or press <kbd class="hint-kbd">N</kbd> while listening to drop a cut at the playhead
+          &nbsp;·&nbsp; Drag edges to resize &nbsp;·&nbsp; Double-click a region to remove it
+        </p>
+      </div>
+
+      <!-- ── Playback controls ─────────────────────────────── -->
+      <div class="playback-bar card">
+        <button id="skip-back-btn" class="btn btn-ghost btn-icon" title="Skip back 5s">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polyline points="11 17 6 12 11 7"/><path d="M18 17V7"/>
+          </svg>
+        </button>
+
+        <button id="play-btn" class="btn btn-play" title="Play / Pause (Space)">
+          <svg id="play-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          <svg id="pause-icon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" class="hidden">
+            <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+          </svg>
+        </button>
+
+        <button id="skip-fwd-btn" class="btn btn-ghost btn-icon" title="Skip forward 5s">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polyline points="13 17 18 12 13 7"/><path d="M6 17V7"/>
+          </svg>
+        </button>
+
+        <span id="time-current" class="time-display">0:00</span>
+
+        <div class="seek-wrap">
+          <div id="seek-bar-container" class="seek-bar-container">
+            <!-- WaveSurfer progress bar is inside waveform; this is purely for display -->
+            <div id="seek-progress" class="seek-progress"></div>
+          </div>
+        </div>
+
+        <span id="time-total" class="time-display">0:00</span>
+
+        <div class="volume-wrap" title="Volume">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+          </svg>
+          <input id="volume-slider" type="range" min="0" max="1" step="0.05" value="1" class="volume-range" />
+        </div>
+
+        <button id="preview-regions-btn" class="btn btn-secondary btn-icon-label" disabled title="Preview all regions sequentially (P)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Preview
+        </button>
+      </div>
+
+      <!-- ── Regions panel ─────────────────────────────────── -->
+      <div class="regions-panel card">
+        <div class="regions-header">
+          <h2 class="regions-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M9 3v18M15 3v18"/>
+            </svg>
+            Cut Regions
+            <span id="regions-count" class="badge">0</span>
+          </h2>
+          <div class="regions-header-right">
+            <button id="session-clear-btn" class="btn btn-ghost btn-sm hidden" title="Remove all auto-saved region data for this file">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+              </svg>
+              Clear saved
+            </button>
+            <button id="clear-regions-btn" class="btn btn-ghost btn-sm" style="display:none">Clear all cuts</button>
+          </div>
+        </div>
+
+        <!-- Session restore banner -->
+        <div id="session-restore-banner" class="session-restore-banner hidden">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polyline points="1 4 1 10 7 10"/>
+            <path d="M3.51 15a9 9 0 1 0 .49-3.72"/>
+          </svg>
+          <span class="restore-msg"></span>
+          <button id="session-restore-dismiss" class="btn-restore-dismiss" title="Dismiss">✕</button>
+        </div>
+
+        <!-- Cut/Keep explanation banner -->
+        <div class="keep-info-banner">
+          <span class="delete-pill">✂ CUT</span>
+          <span>Highlighted regions = parts that will be <strong>deleted</strong>.</span>
+          <span class="keep-pill">✅ KEPT</span>
+          <span>Everything <strong>outside</strong> the regions is saved to your MP3.</span>
+        </div>
+
+        <div id="regions-empty" class="regions-empty">
+          <p>No cuts yet.<br/>Drag on the waveform or click <strong>✂ Mark to Cut</strong> to select parts you want to <strong>remove</strong> (e.g. intro music, silence).</p>
+        </div>
+
+        <ul id="regions-list" class="regions-list" role="list"></ul>
+      </div>
+
+    </section>
+
+  </div><!-- .app-shell -->
+
+
+  <!-- ── Toast notification ────────────────────────────────── -->
+  <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
+
+  <!-- ── Preview modal ───────────────────────────────────────── -->
+  <div id="preview-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pv-modal-title">
+    <div class="modal-card pv-modal-card">
+
+      <!-- Header -->
+      <div class="pv-header">
+        <div class="pv-header-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </div>
+        <div class="pv-header-text">
+          <h2 id="pv-modal-title" class="pv-title">Preview Export</h2>
+          <p class="pv-subtitle">Listen before you save</p>
+        </div>
+      </div>
+
+      <!-- Track info -->
+      <div class="pv-track-info">
+        <p id="pv-track-title"   class="pv-track-name"></p>
+        <p id="pv-track-channel" class="pv-track-channel"></p>
+        <div class="pv-badges">
+          <span id="pv-segments-badge" class="pv-badge pv-badge--green"></span>
+          <span id="pv-duration-badge" class="pv-badge pv-badge--blue"></span>
+        </div>
+      </div>
+
+      <!-- Hidden audio element -->
+      <audio id="preview-audio" preload="auto"></audio>
+
+      <!-- Custom player -->
+      <div class="pv-player">
+        <!-- Seek bar -->
+        <div id="pv-seek-bar" class="pv-seek-bar" role="slider"
+             aria-label="Seek" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="pv-seek-track">
+            <div id="pv-seek-progress" class="pv-seek-fill"></div>
+            <div class="pv-seek-thumb"></div>
+          </div>
+        </div>
+
+        <!-- Time row -->
+        <div class="pv-time-row">
+          <span id="pv-time-current" class="pv-time">0:00</span>
+          <span id="pv-time-total"   class="pv-time pv-time--total">0:00</span>
+        </div>
+
+        <!-- Play / Pause -->
+        <div class="pv-play-row">
+          <button id="pv-play-btn" class="btn btn-play pv-play-btn" title="Play / Pause (Space)">
+            <svg id="pv-play-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            <svg id="pv-pause-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="hidden">
+              <rect x="6" y="4" width="4" height="16"/>
+              <rect x="14" y="4" width="4" height="16"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="pv-actions">
+        <button id="pv-save-btn" class="btn btn-primary pv-save-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Save MP3
+        </button>
+        <button id="pv-close-btn" class="btn btn-ghost pv-close-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
+          </svg>
+          Continue Editing
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Export success modal ──────────────────────────────── -->
+  <div id="export-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <div class="modal-icon success-icon" aria-hidden="true">✅</div>
+      <h2 id="modal-title" class="modal-title">MP3 Saved!</h2>
+      <p id="modal-body" class="modal-body"></p>
+      <div class="modal-actions">
+        <button id="modal-new-btn" class="btn btn-secondary">New Download</button>
+        <button id="modal-close-btn" class="btn btn-primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Region context menu ──────────────────────────────────── -->
+  <div id="region-context-menu" class="region-ctx-menu hidden" role="menu">
+    <button class="ctx-btn ctx-loop-btn" role="menuitem">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <polyline points="17 1 21 5 17 9"/>
+        <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+        <polyline points="7 23 3 19 7 15"/>
+        <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+      </svg>
+      Loop region &nbsp;<kbd class="btn-kbd">L</kbd>
+    </button>
+    <button class="ctx-btn ctx-remove-btn" role="menuitem">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      </svg>
+      Remove cut
+    </button>
+  </div>
+
+  <!-- ── Keyboard shortcuts modal ──────────────────────────────── -->
+  <div id="shortcuts-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+    <div class="modal-card shortcuts-card">
+      <div class="shortcuts-header">
+        <h2 id="shortcuts-title" class="shortcuts-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <rect x="2" y="4" width="20" height="16" rx="2"/>
+            <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h.01M12 13h.01M16 13h.01M6 17h12"/>
+          </svg>
+          Keyboard Shortcuts
+        </h2>
+        <button id="shortcuts-close-btn" class="btn btn-ghost btn-icon shortcuts-close" title="Close (Esc)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="shortcuts-grid">
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>Space</kbd></span>
+          <span class="shortcut-desc">Play / Pause</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>N</kbd></span>
+          <span class="shortcut-desc">Drop a 10s cut at playhead</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>P</kbd></span>
+          <span class="shortcut-desc">Generate preview</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>L</kbd></span>
+          <span class="shortcut-desc">Stop looping region</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>F</kbd></span>
+          <span class="shortcut-desc">Toggle fullscreen waveform</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>←</kbd> <kbd>→</kbd></span>
+          <span class="shortcut-desc">Skip 5 seconds</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Z</kbd></span>
+          <span class="shortcut-desc">Undo</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Y</kbd></span>
+          <span class="shortcut-desc">Redo</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>Double-click</kbd></span>
+          <span class="shortcut-desc">Remove region</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>Right-click</kbd></span>
+          <span class="shortcut-desc">Loop / Remove region menu</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>Del</kbd></span>
+          <span class="shortcut-desc">Remove focused region</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>?</kbd></span>
+          <span class="shortcut-desc">Show this help</span>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-keys"><kbd>Esc</kbd></span>
+          <span class="shortcut-desc">Exit fullscreen / close modal</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main JS as ES module – v9 -->
+  <script type="module" src="/static/js/app.js?v=9"></script>
+</body>
+</html>
