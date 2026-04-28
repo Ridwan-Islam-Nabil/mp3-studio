@@ -37,7 +37,7 @@ Server starts at `http://localhost:5000`. Static files are never cached (`SEND_F
 ## File Structure
 
 ```
-YtDownAndEdit/
+mp3-studio/
 ├── app.py                  ← Flask backend (all API endpoints)
 ├── requirements.txt        ← pip dependencies
 ├── run.bat                 ← Windows launcher (auto-installs everything)
@@ -48,18 +48,18 @@ YtDownAndEdit/
 │   └── index.html          ← Single HTML page (all UI, no JS inline)
 ├── static/
 │   ├── css/
-│   │   └── style.css       ← All styles (dark glassmorphic theme)
+│   │   └── style.css       ← All styles (dark/light glassmorphic theme)
 │   └── js/
 │       ├── app.js          ← Entry point (~25 lines, just boots on DOMContentLoaded)
 │       ├── constants.js    ← Shared constants (palette, intervals, skip duration)
 │       ├── utils.js        ← Pure helpers: time format/parse, escape, file size
 │       ├── state.js        ← App state singleton + History undo/redo stack
 │       ├── api.js          ← All fetch() calls to Flask (no DOM, no state)
-│       ├── ui.js           ← Generic DOM helpers (toasts, steps, seek bar, modals)
+│       ├── ui.js           ← Generic DOM helpers (toasts, steps, seek bar, modals, theme)
 │       ├── regions.js      ← Region CRUD, list rendering, inline time editor
-│       ├── wavesurfer.js   ← WaveSurfer v7 lifecycle, Preview, cursor, zoom UI
+│       ├── wavesurfer.js   ← WaveSurfer v7 lifecycle, minimap, cursor, zoom UI
 │       ├── upload.js       ← Upload tab: drag-drop, XHR upload with progress
-│       └── events.js       ← All event wiring, async flows, keyboard shortcuts
+│       └── events.js       ← All event wiring, async flows, session save/restore, loop, shortcuts
 └── temp_audio/             ← Auto-created, gitignored. Holds temp MP3 files.
 ```
 
@@ -92,6 +92,18 @@ api.js        — NO imports
 - `regions.js` does NOT import from `wavesurfer.js`.
 - `wavesurfer.js` does NOT import from `events.js` or `upload.js`.
 
+### Custom DOM Events (decoupled communication without imports)
+
+Because `regions.js` cannot import from `events.js` (circular), they communicate via DOM events:
+
+| Event | Dispatched by | Listened by | Purpose |
+|-------|--------------|-------------|---------|
+| `ws-ready` | `wavesurfer.js` (in `ws.on("ready")`) | `events.js` | Triggers session restore after audio loads |
+| `regions-changed` | `regions.js` (in `renderRegionsList`) | `events.js` | Triggers auto-save to localStorage |
+| `region-contextmenu` | `regions.js` (on right-click) | `events.js` | Shows loop/remove context menu |
+
+**Critical:** The `ws-ready` listener uses `{ once: true }` and is re-registered in `handleNewSession()` for each new audio session.
+
 ---
 
 ## State Management
@@ -118,6 +130,10 @@ State = {
   currentPreviewFile: string|null,   // "prev_xxx.mp3"
   activeRegionId: string|null,
 
+  // Loop region
+  loopActive:   bool,
+  loopRegionId: string|null,
+
   // Polling
   pollTimer,
 }
@@ -143,7 +159,8 @@ All in `app.py`. Security: every filename is validated with regex before use.
 | `POST` | `/api/preview_export` | Merge kept regions into a preview MP3 (no save dialog) |
 | `GET`  | `/api/preview_audio/prev_<hex>.mp3` | Stream preview MP3 to modal player |
 | `POST` | `/api/save_preview` | Open OS folder picker, copy preview file there |
-| `POST` | `/api/export` | Open OS folder picker, FFmpeg stitch, save final MP3 |
+| `POST` | `/api/export_stream` | SSE export — streams real FFmpeg progress to client |
+| `POST` | `/api/export` | Classic export — folder picker, FFmpeg stitch, save (no SSE) |
 | `POST` | `/api/cleanup` | Delete source + preview temp files |
 
 **Filename validation:**
@@ -154,6 +171,12 @@ All in `app.py`. Security: every filename is validated with regex before use.
 - `_last_filename` — auto-deleted when a new download starts
 - `_current_preview` — auto-deleted when a new preview is generated
 - `_tasks` — in-memory dict of download task states
+
+**Custom title:** `/api/export`, `/api/export_stream`, and `/api/save_preview` all accept an optional `custom_title` field in the request body. If provided, it overrides `title` for the output filename.
+
+**SSE Export helpers:**
+- `_ffmpeg_trim_progress(src, dst, start, end, seg_dur, pct_start, pct_end)` — runs FFmpeg with `-progress pipe:1 -nostats` and yields integer progress values by parsing `out_time_ms=` lines
+- `_ffmpeg_concat_progress(concat_list, dst, total_dur, pct_start, pct_end)` — same for the concat step
 
 **Region logic:** The app marks parts to **DELETE** (cut regions). The backend inverts them to get keep-regions before calling FFmpeg. `_invert_regions(cut_regions, duration)` handles this.
 
@@ -170,32 +193,46 @@ This means: regions = parts to DELETE, everything OUTSIDE regions = saved.
 
 ---
 
+## Session Auto-Save
+
+Regions are automatically saved to `localStorage` whenever they change.
+
+- **Key format:** `mp3studio:session:${filename}` (filename = UUID4 + .mp3)
+- **Value:** `{ regions: [...], savedAt: timestamp }`
+- **Save trigger:** `regions-changed` DOM event → `saveSession()` in `events.js`
+- **Restore trigger:** `ws-ready` DOM event → `restoreSession()` in `events.js` — uses `{ once: true }` and is re-registered in `handleNewSession()`
+- **Restore behavior:** Calls `Regions._create()` for each saved region with `addToHistory = false`, then calls `History.clear()` so undo history starts fresh
+- **Theme preference:** Stored separately at `mp3studio:theme` (`"dark"` or `"light"`)
+
+---
+
 ## Waveform Editor Layout
 
 From top to bottom inside `.waveform-card`:
 
 ```
 [waveform-header]     label | Cursor time | Playhead time | Fullscreen btn
+[minimap-mount]       Full-overview minimap (un-zoomed, always shows full audio)
 [timeline-mount]      Time ruler — scrolls in sync with waveform when zoomed
 [waveform-mount-wrap] WaveSurfer waveform + hover cursor overlay
 [zoom-bar]            − | [full-width slider] | + | Fit | 25×
 [waveform-hint]       Instruction text
 ```
 
-**Timeline scroll sync:** The `#timeline-mount` div has `overflow-x: scroll` with hidden scrollbar. `WS.init()` listens to `ws.on("scroll", scrollLeft => ...)` and sets `timelineMount.scrollLeft = scrollLeft` to keep the ruler aligned with the waveform when zoomed.
+**Timeline scroll sync:** The `#timeline-mount` div has `overflow-x: scroll` with hidden scrollbar. `WS.init()` listens to `ws.on("scroll", scrollLeft => ...)` and sets `timelineMount.scrollLeft = scrollLeft`.
 
-**Zoom slider:** Uses JS (`updateZoomUI(val)`) to paint the gradient fill because CSS alone can't style the filled portion of `<input type="range">` cross-browser.
+**Minimap:** Uses WaveSurfer's `MinimapPlugin` imported from CDN. Container is `#minimap-mount`. Shows regions and allows click-to-seek without affecting zoom level.
 
 ---
 
 ## Preview Modal Flow
 
-1. User clicks **Preview** button (or presses N key? No — N adds a cut region)
+1. User clicks **Preview** button (or presses P)
 2. `_generatePreview()` in `events.js` calls `POST /api/preview_export`
 3. Backend merges kept regions → saves `prev_xxx.mp3` to temp folder
 4. Returns `{ preview_filename, preview_duration, kept_segments }`
-5. `UI.showPreviewModal()` opens the modal, loads the audio via `GET /api/preview_audio/`
-6. User listens with a custom HTML5 audio player (NOT WaveSurfer — just `<audio>` element)
+5. `UI.showPreviewModal()` opens the modal, loads audio via `GET /api/preview_audio/`
+6. User listens with a custom HTML5 audio player (NOT WaveSurfer)
 7. **Save MP3** → `POST /api/save_preview` → folder picker → copy file → done
 8. **Continue Editing** → `UI.hidePreviewModal()` → all cut regions remain intact
 
@@ -225,6 +262,8 @@ All colors/sizes in CSS custom properties at the top of `style.css`:
 --font-mono: 'JetBrains Mono', monospace
 ```
 
+**Light theme:** Applied via `[data-theme="light"]` attribute on `<html>`. Overrides all CSS variables. Toggle via `UI.toggleTheme()`, persisted in `localStorage` at `mp3studio:theme`.
+
 Theme: dark glassmorphic, purple-teal gradient. Cards use `backdrop-filter: blur(14px)`.
 
 **Button variants:** `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-ghost`, `.btn-play`
@@ -235,7 +274,7 @@ Theme: dark glassmorphic, purple-teal gradient. Cards use `backdrop-filter: blur
 ## Key Design Decisions & Why
 
 **1. No circular dependencies**
-Took significant effort to establish. `regions.js` uses `State.ws?.setTime()` directly instead of `WS.seek()` to avoid importing `wavesurfer.js`. `renderRegionsList` and `openTimeEditor` live in `regions.js`, not `ui.js`, so `ui.js` has no knowledge of regions.
+Took significant effort to establish. `regions.js` uses `State.ws?.setTime()` directly instead of `WS.seek()` to avoid importing `wavesurfer.js`. Cross-module communication uses DOM custom events instead of imports.
 
 **2. History callers must refresh buttons**
 `History.push/undo/redo/clear` do not call `UI.refreshHistoryButtons()`. If you add a new place that modifies history, you MUST call `UI.refreshHistoryButtons()` afterward.
@@ -249,8 +288,11 @@ This is counterintuitive but deliberate. Users drag over the parts they want to 
 **5. Static files never cached**
 `app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0` prevents browsers from caching old JS/CSS. Still bump `?v=N` on the script tag whenever JS changes, as an extra safety net.
 
-**6. Timeline at top, zoom slider at bottom**
-Timeline is a ruler showing time positions — belongs at the top like a video editor timeline. Zoom slider is a view control — belongs at the bottom near the waveform it controls.
+**6. SSE export uses `-progress pipe:1`**
+FFmpeg's structured progress output is captured from stdout using `-progress pipe:1 -nostats`. This gives clean `out_time_ms=NNNN` lines that are easy to parse without regex.
+
+**7. Loop uses requestAnimationFrame, not setInterval**
+The loop watcher uses `requestAnimationFrame` for smooth, low-latency region boundary detection. It stores the RAF ID in `State._loopRAF` and is cancelled by `_stopLoop()`.
 
 ---
 
@@ -266,7 +308,9 @@ Timeline is a ruler showing time positions — belongs at the top like a video e
 
 5. **Using `WS.seek()` inside `regions.js`** — this would create a circular import. Always use `State.ws?.setTime()` directly in `regions.js`.
 
-6. **The `Preview` object in `wavesurfer.js`** is exported but no longer used (old sequential-playback behavior). Do not call it. The new preview flow is entirely in `events.js` → `api.js` → `app.py`.
+6. **Not re-registering the `ws-ready` listener in `handleNewSession()`** — the second audio load won't trigger session restore. The listener uses `{ once: true }` and must be re-added each time.
+
+7. **The `Preview` object in `wavesurfer.js`** is exported but no longer used. Do not call it. The new preview flow is entirely in `events.js` → `api.js` → `app.py`.
 
 ---
 
@@ -277,13 +321,16 @@ Timeline is a ruler showing time positions — belongs at the top like a video e
 | `Space` | Play / Pause |
 | `N` | Drop a 10s cut region centered on playhead |
 | `P` | Open Preview modal (generate merged audio) |
+| `L` | Stop looping region |
 | `F` | Toggle fullscreen waveform |
+| `?` | Open keyboard shortcuts overlay |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
 | `←` / `→` | Skip 5 seconds |
 | `Double-click region` | Remove that cut |
+| `Right-click region` | Loop / Remove context menu |
 | `Delete` (on focused region row) | Remove that cut |
-| `Esc` | Exit fullscreen |
+| `Esc` | Exit fullscreen / close modals |
 
 ---
 

@@ -45,23 +45,35 @@ The script handles everything automatically:
 
 ### Waveform Editor
 - **Visual waveform** — full audio waveform with precise timeline and zoom up to 2000×
-- **Hover time cursor** — floating cursor line + badge shows the exact time (millisecond precision) as your mouse moves over the waveform — critical when zoomed in for fine trimming
-- **Time bar header** — always-visible display at the top of the waveform showing **Cursor** time and **Playhead** time in `M:SS.mmm` format, stable regardless of zoom level
-- **Top timeline ruler** — time tick marks placed directly above the waveform; scrolls in sync with the waveform when zoomed in so you always see the correct time positions
-- **Full-width zoom slider** — redesigned wide slider at the bottom of the waveform with a gradient thumb, fill indicator, and live zoom badge (e.g. `25×`, `1.5k×`)
+- **Minimap overview** — a full-width mini waveform above the editor that stays un-zoomed, showing cut regions in context while you're zoomed deep into a section. Click anywhere on it to jump there instantly.
+- **Hover time cursor** — floating cursor line + badge shows the exact time (millisecond precision) as your mouse moves over the waveform
+- **Time bar header** — always-visible display showing **Cursor** time and **Playhead** time in `M:SS.mmm` format, stable regardless of zoom level
+- **Top timeline ruler** — time tick marks placed directly above the waveform; scrolls in sync when zoomed
+- **Full-width zoom slider** — wide slider at the bottom with gradient thumb, fill indicator, and live zoom badge (e.g. `25×`, `1.5k×`)
 - **Fullscreen mode** — press `F` to expand the waveform to fill your entire screen
 - **Multi-region cut trimming** — drag on the waveform to mark parts to **delete** (shown in red)
 - **Precision time editing** — click any timestamp in the region list to type an exact value
+- **Loop region** — right-click any cut region to open a context menu. Choose **Loop region** to play it on repeat so you can listen carefully before deciding. Press `L` to stop.
 - **Merged output** — all remaining segments are stitched together seamlessly into one MP3
-- **Preview Export** — generates a full merged MP3 of the kept parts and plays it back in a modal player so you can listen before saving. Click **Save MP3** to keep it or **Continue Editing** to go back and adjust cuts (all regions stay intact)
+- **Preview Export** — generates a full merged MP3 of the kept parts and plays it back in a modal player so you can listen before saving
 - **Undo / Redo** — full history for every cut action (Ctrl+Z / Ctrl+Y)
 - **Reset** — clear all cuts and start fresh without re-downloading or re-uploading
-- **Home** — go back to the start page from the editor at any time
+
+### Smart Session Saving
+- **Auto-save** — every cut region is automatically saved to your browser's local storage, keyed to that audio file
+- **Auto-restore** — if you refresh the page or reopen the app, your cuts come back automatically with a restore banner
+- **Clear saved** — a "Clear saved" button lets you wipe the saved session whenever you want
 
 ### Export & Files
+- **Custom output filename** — an editable filename field in the editor lets you name your MP3 before saving
+- **Real export progress** — the Export button shows a live progress bar as FFmpeg processes each segment
 - **Choose save folder** — native OS folder picker opens on export
 - **Auto temp cleanup** — temp files deleted automatically on new session or server restart
 - **320 kbps quality** — best audio quality preserved throughout
+
+### UI & Accessibility
+- **Dark / Light theme** — toggle between a dark glassmorphic theme and a clean light theme. Preference is saved and restored on every launch.
+- **Keyboard shortcut overlay** — press `?` at any time to open a modal showing every keyboard shortcut
 
 ---
 
@@ -80,19 +92,21 @@ The script handles everything automatically:
 
 ### Trimming
 4. **Drag on the waveform** to mark parts you want to **remove** (shown in red)
-   - e.g. drag over the intro music or outro
 5. **Resize** a cut by dragging its left or right edge
 6. **Click a timestamp** in the region list to type an exact time (e.g. `0:15` or `1:23.5`)
-7. Click **Preview** — the app merges the kept parts server-side and opens a player modal
+7. **Right-click a region** to loop it and listen carefully before committing
+8. **Edit the filename** in the output field at the top before saving
+9. Click **Preview** — the app merges the kept parts server-side and opens a player modal
    - Listen to confirm everything sounds right
    - Click **Save MP3** to pick a save folder and download
    - Or click **Continue Editing** to go back and adjust (all your cuts remain untouched)
-8. Alternatively, click **Export MP3** directly → choose save folder → done!
+10. Alternatively, click **Export MP3** directly → watch the real progress bar → done!
 
 ### Other controls
 - Use **Reset** to clear all cuts (audio stays loaded)
 - Use **Home** to go back and start a new session
 - Use **Undo / Redo** for any mistakes
+- Press `?` to see all keyboard shortcuts
 
 ---
 
@@ -102,14 +116,17 @@ The script handles everything automatically:
 |-----|--------|
 | `Space` | Play / Pause |
 | `N` | Drop a 10-second cut region centered on the playhead |
-| `P` | Toggle preview of kept regions |
+| `P` | Generate preview of kept regions |
+| `L` | Stop looping region |
 | `F` | Toggle fullscreen waveform |
+| `?` | Open keyboard shortcuts overlay |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
 | `←` / `→` | Skip 5 seconds |
 | `Double-click region` | Remove that cut |
+| `Right-click region` | Loop / Remove context menu |
 | `Delete` (on focused region) | Remove that cut |
-| `Esc` | Exit fullscreen |
+| `Esc` | Exit fullscreen / close modal |
 
 ---
 
@@ -117,25 +134,25 @@ The script handles everything automatically:
 
 ```
 mp3-studio/
-├── app.py                  # Flask backend (download, upload, convert, export)
+├── app.py                  # Flask backend (download, upload, convert, export, SSE)
 ├── requirements.txt        # Python packages (auto-installed)
 ├── run.bat                 # Windows launcher — double-click to start
 ├── run.sh                  # macOS/Linux launcher
 ├── templates/
 │   └── index.html          # Single-page UI (YouTube + Upload tabs, waveform editor)
 ├── static/
-│   ├── css/style.css       # Dark theme, glass morphism, responsive styles
+│   ├── css/style.css       # Dark/light theme, glass morphism, responsive styles
 │   └── js/
 │       ├── app.js          # Entry point — boots on DOMContentLoaded (~25 lines)
-│       ├── constants.js    # Shared constants (palette, poll interval, skip seconds…)
+│       ├── constants.js    # Shared constants (palette, poll interval, skip seconds)
 │       ├── utils.js        # Pure helpers: time format/parse, HTML escape, file size
 │       ├── state.js        # State singleton + History command stack (undo/redo)
-│       ├── api.js          # Fetch wrappers — no DOM, no state mutations
-│       ├── ui.js           # Generic DOM helpers (toast, steps, seek bar, tabs…)
+│       ├── api.js          # Fetch wrappers including SSE exportStream
+│       ├── ui.js           # DOM helpers (toast, steps, seek bar, theme, modals)
 │       ├── regions.js      # Region CRUD, list rendering, inline time editor
-│       ├── wavesurfer.js   # WaveSurfer v7 lifecycle, Preview, hover cursor, zoom UI
+│       ├── wavesurfer.js   # WaveSurfer v7 lifecycle, minimap, hover cursor, zoom UI
 │       ├── upload.js       # Upload tab: drag-drop, XHR upload with progress
-│       └── events.js       # All event wiring, async flows, fullscreen, keyboard shortcuts
+│       └── events.js       # Event wiring, session save/restore, loop, shortcuts
 └── temp_audio/             # Auto-cleaned temp folder (gitignored)
 ```
 
@@ -143,7 +160,7 @@ mp3-studio/
 
 ```
 app.js
-  ├── events.js   → state, regions, wavesurfer, ui, api, upload, constants
+  ├── events.js   → state, regions, wavesurfer, ui, api, upload, constants, utils
   ├── upload.js   → state, ui, utils, wavesurfer
   └── wavesurfer.js → state, regions, ui, utils, constants
          └── regions.js → state, ui, constants, utils
@@ -152,6 +169,10 @@ app.js
 ```
 
 All imports are strictly one-way — no circular dependencies.
+Inter-module communication without imports uses custom DOM events:
+- `ws-ready` — dispatched by wavesurfer.js when audio loads; events.js restores saved session
+- `regions-changed` — dispatched by regions.js on every change; events.js auto-saves to localStorage
+- `region-contextmenu` — dispatched by regions.js on right-click; events.js shows context menu
 
 ---
 
@@ -167,7 +188,8 @@ All imports are strictly one-way — no circular dependencies.
 | `POST` | `/api/preview_export` | Merge kept regions into a preview MP3 |
 | `GET`  | `/api/preview_audio/<file>` | Stream the preview MP3 to the modal player |
 | `POST` | `/api/save_preview` | Save preview MP3 to user-chosen folder |
-| `POST` | `/api/export` | Trim cuts + save MP3 directly via folder picker |
+| `POST` | `/api/export_stream` | SSE export — streams real FFmpeg progress |
+| `POST` | `/api/export` | Classic export (no SSE, kept as fallback) |
 | `POST` | `/api/cleanup` | Delete temp files (source + preview) |
 
 ---
