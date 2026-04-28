@@ -110,6 +110,19 @@ export function initEvents() {
 
   document.getElementById("volume-slider").addEventListener("input", e => WS.setVolume(+e.target.value));
 
+  // ── Playback speed slider ─────────────────────────────────────
+  document.getElementById("speed-slider").addEventListener("input", e => {
+    const rate = +e.target.value;
+    if (State.ws) State.ws.setPlaybackRate(rate);
+    _updateSpeedBadge(rate);
+  });
+
+  document.getElementById("speed-reset-btn").addEventListener("click", () => {
+    document.getElementById("speed-slider").value = 1;
+    if (State.ws) State.ws.setPlaybackRate(1);
+    _updateSpeedBadge(1);
+  });
+
   document.getElementById("preview-regions-btn").addEventListener("click", _generatePreview);
 
   // Seek bar click
@@ -479,6 +492,10 @@ export async function handleNewSession() {
   State.colorCycle = 0;
   History.clear();
 
+  // Reset playback speed to 1×
+  const speedSlider = document.getElementById("speed-slider");
+  if (speedSlider) { speedSlider.value = 1; _updateSpeedBadge(1); }
+
   // Reset UI inputs
   document.getElementById("url-input")   .value = "";
   document.getElementById("video-preview").classList.add("hidden");
@@ -816,4 +833,14 @@ function _setFetchLoading(on) {
   const btn   = document.getElementById("fetch-btn");
   btn.disabled    = on;
   btn.textContent = on ? "Fetching…" : "Fetch";
+}
+
+function _updateSpeedBadge(rate) {
+  const badge = document.getElementById("speed-reset-btn");
+  if (!badge) return;
+  // Format: "1×", "0.5×", "1.5×" — strip unnecessary trailing zero for cleanliness
+  const label = (rate % 1 === 0) ? `${rate}×` : `${rate.toFixed(2).replace(/0$/, "")}×`;
+  badge.textContent = label;
+  // Highlight when not at 1× so the user knows speed is altered
+  badge.classList.toggle("speed-badge--active", rate !== 1);
 }
