@@ -259,7 +259,7 @@ export function renderRegionsList() {
 
       <div class="region-actions">
         <button class="region-btn play-region-btn" data-id="${r.id}"
-                title="Seek to region start">
+                title="Preview this cut (plays inline)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
             <polygon points="5 3 19 12 5 21 5 3"/>
           </svg>
@@ -275,17 +275,71 @@ export function renderRegionsList() {
           </svg>
         </button>
       </div>
+    </li>
+    <!-- Inline mini-player (hidden until play is clicked) -->
+    <li class="region-miniplayer hidden" data-player-id="${r.id}" role="region"
+        aria-label="Mini player for ${escHtml(r.label)}">
+      <div class="rmp-inner">
+        <button class="rmp-play-btn" data-id="${r.id}" title="Play / Pause">
+          <svg class="rmp-icon-play" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          <svg class="rmp-icon-pause hidden" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+          </svg>
+        </button>
+        <div class="rmp-seek-wrap">
+          <div class="rmp-seek-track">
+            <div class="rmp-seek-fill" data-id="${r.id}"></div>
+          </div>
+        </div>
+        <span class="rmp-time" data-id="${r.id}">0:00</span>
+        <span class="rmp-duration">${_fmtTime(dur)}</span>
+        <button class="rmp-close-btn" data-id="${r.id}" title="Close player">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
     </li>`;
   }).join("");
 
   // ── Event delegation ───────────────────────────────────────
 
-  // Seek-to-start buttons
+  // Play buttons → open inline mini-player
   list.querySelectorAll(".play-region-btn").forEach(btn => {
     btn.addEventListener("click", e => {
       e.stopPropagation();
-      const d = State.regionMap.get(btn.dataset.id);
-      if (d && State.ws) State.ws.setTime(Math.max(0, d.wsRef.start));
+      _openMiniPlayer(btn.dataset.id);
+    });
+  });
+
+  // Mini-player controls (play/pause, seek, close)
+  list.querySelectorAll(".rmp-play-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      _toggleMiniPlayer(btn.dataset.id);
+    });
+  });
+
+  list.querySelectorAll(".rmp-seek-track").forEach(track => {
+    track.addEventListener("click", e => {
+      e.stopPropagation();
+      const fill = track.querySelector(".rmp-seek-fill");
+      const id   = fill?.dataset.id;
+      const audio = _getMiniAudio(id);
+      if (!audio) return;
+      const rect = track.getBoundingClientRect();
+      const pct  = (e.clientX - rect.left) / rect.width;
+      const d    = State.regionMap.get(id);
+      if (d) audio.currentTime = d.wsRef.start + pct * (d.wsRef.end - d.wsRef.start);
+    });
+  });
+
+  list.querySelectorAll(".rmp-close-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      _closeMiniPlayer(btn.dataset.id);
     });
   });
 
@@ -298,7 +352,7 @@ export function renderRegionsList() {
     });
   });
 
-  // Row click → seek + highlight
+  // Row click → highlight + seek WaveSurfer to region start
   list.querySelectorAll(".region-item").forEach(item => {
     item.addEventListener("click", () => {
       const d = State.regionMap.get(item.dataset.id);
@@ -365,4 +419,121 @@ export function openTimeEditor(chip) {
     if (e.key === "Enter")  { e.preventDefault(); commit(); }
     if (e.key === "Escape") { e.preventDefault(); renderRegionsList(); }
   });
+}
+
+/* ══════════════════════════════════════════════════════════════
+   REGION MINI-PLAYER  —  inline per-region audio preview
+═══════════════════════════════════════════════════════════════ */
+
+// One shared Audio element per region id — cleaned up when region is removed
+const _miniAudios = new Map();   // id → HTMLAudioElement
+
+function _getMiniAudio(id) { return _miniAudios.get(id) || null; }
+
+function _openMiniPlayer(id) {
+  const playerEl = document.querySelector(`.region-miniplayer[data-player-id="${id}"]`);
+  if (!playerEl) return;
+
+  // If already open, just toggle play/pause
+  if (!playerEl.classList.contains("hidden")) {
+    _toggleMiniPlayer(id);
+    return;
+  }
+
+  // Close any other open mini-player first
+  document.querySelectorAll(".region-miniplayer:not(.hidden)").forEach(el => {
+    _closeMiniPlayer(el.dataset.playerId);
+  });
+
+  const d = State.regionMap.get(id);
+  if (!d || !State.filename) return;
+
+  // Create (or reuse) Audio element
+  let audio = _miniAudios.get(id);
+  if (!audio) {
+    audio = new Audio(`/api/audio/${State.filename}`);
+    audio.preload = "none";
+    _miniAudios.set(id, audio);
+  }
+
+  playerEl.classList.remove("hidden");
+
+  // Seek to region start then play
+  audio.currentTime = d.wsRef.start;
+  audio.play().catch(() => {});
+
+  _updateMiniPlayIcon(id, true);
+
+  // Update seek fill and time display
+  audio.addEventListener("timeupdate", _makeMiniTimeUpdater(id, d), { passive: true });
+
+  // Auto-stop at region end
+  audio._stopHandler = () => {
+    if (audio.currentTime >= d.wsRef.end) {
+      audio.pause();
+      audio.currentTime = d.wsRef.start;
+      _updateMiniPlayIcon(id, false);
+      _updateMiniFill(id, 0);
+      _updateMiniTime(id, d.wsRef.start, d.wsRef.start);
+    }
+  };
+  audio.addEventListener("timeupdate", audio._stopHandler, { passive: true });
+
+  audio.addEventListener("pause",  () => _updateMiniPlayIcon(id, false), { passive: true });
+  audio.addEventListener("play",   () => _updateMiniPlayIcon(id, true),  { passive: true });
+  audio.addEventListener("ended",  () => {
+    _updateMiniPlayIcon(id, false);
+    _updateMiniFill(id, 0);
+  }, { passive: true });
+}
+
+function _toggleMiniPlayer(id) {
+  const audio = _getMiniAudio(id);
+  if (!audio) return;
+  audio.paused ? audio.play().catch(() => {}) : audio.pause();
+}
+
+function _closeMiniPlayer(id) {
+  const audio = _getMiniAudio(id);
+  if (audio) {
+    audio.pause();
+    audio.src = "";
+    _miniAudios.delete(id);
+  }
+  const playerEl = document.querySelector(`.region-miniplayer[data-player-id="${id}"]`);
+  if (playerEl) playerEl.classList.add("hidden");
+}
+
+function _makeMiniTimeUpdater(id, d) {
+  return function _updater() {
+    const audio = _getMiniAudio(id);
+    if (!audio) return;
+    const elapsed = Math.max(0, audio.currentTime - d.wsRef.start);
+    const total   = d.wsRef.end - d.wsRef.start;
+    const pct     = total > 0 ? Math.min(1, elapsed / total) * 100 : 0;
+    _updateMiniFill(id, pct);
+    _updateMiniTime(id, audio.currentTime, d.wsRef.start);
+  };
+}
+
+function _updateMiniPlayIcon(id, playing) {
+  const playerEl = document.querySelector(`.region-miniplayer[data-player-id="${id}"]`);
+  if (!playerEl) return;
+  playerEl.querySelector(".rmp-icon-play") ?.classList.toggle("hidden",  playing);
+  playerEl.querySelector(".rmp-icon-pause")?.classList.toggle("hidden", !playing);
+}
+
+function _updateMiniFill(id, pct) {
+  const fill = document.querySelector(`.rmp-seek-fill[data-id="${id}"]`);
+  if (fill) fill.style.width = pct + "%";
+}
+
+function _updateMiniTime(id, currentTime, startTime) {
+  const el = document.querySelector(`.rmp-time[data-id="${id}"]`);
+  if (el) el.textContent = _fmtTime(Math.max(0, currentTime - startTime));
+}
+
+/** Stop and clean up all mini-players (called on clearAll / new session) */
+export function closeAllMiniPlayers() {
+  _miniAudios.forEach((audio, id) => _closeMiniPlayer(id));
 }

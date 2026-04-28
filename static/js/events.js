@@ -8,7 +8,7 @@
  */
 
 import { State, History }                        from "./state.js";
-import { Regions }                               from "./regions.js";
+import { Regions, closeAllMiniPlayers }          from "./regions.js";
 import { WS, loadEditor, updateZoomUI }          from "./wavesurfer.js";
 import { UI }                                    from "./ui.js";
 import { API }                                   from "./api.js";
@@ -469,6 +469,9 @@ export async function handleNewSession() {
 
   // Stop any active loop
   _stopLoop();
+
+  // Close all region mini-players
+  closeAllMiniPlayers();
 
   // Close preview modal and stop audio if open
   if (State.previewActive) UI.hidePreviewModal();

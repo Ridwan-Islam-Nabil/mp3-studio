@@ -30,7 +30,7 @@ bash run.sh
 
 Server starts at `http://localhost:5000`. Static files are never cached (`SEND_FILE_MAX_AGE_DEFAULT = 0`).
 
-**Every time you change a JS or CSS file, bump the `?v=N` cache-buster** on the script tag in `templates/index.html`. Current version: `?v=10`.
+**Every time you change a JS or CSS file, bump the `?v=N` cache-buster** on the script tag in `templates/index.html`. Current version: `?v=11`.
 
 ---
 
@@ -56,7 +56,7 @@ mp3-studio/
 │       ├── state.js        ← App state singleton + History undo/redo stack
 │       ├── api.js          ← All fetch() calls to Flask (no DOM, no state)
 │       ├── ui.js           ← Generic DOM helpers (toasts, steps, seek bar, modals, theme)
-│       ├── regions.js      ← Region CRUD, list rendering, inline time editor
+│       ├── regions.js      ← Region CRUD, list rendering, inline time editor, mini-player engine
 │       ├── wavesurfer.js   ← WaveSurfer v7 lifecycle, minimap, cursor, zoom UI
 │       ├── upload.js       ← Upload tab: drag-drop, XHR upload with progress
 │       └── events.js       ← All event wiring, async flows, session save/restore, loop, shortcuts
@@ -103,6 +103,12 @@ Because `regions.js` cannot import from `events.js` (circular), they communicate
 | `region-contextmenu` | `regions.js` (on right-click) | `events.js` | Shows loop/remove context menu |
 
 **Critical:** The `ws-ready` listener uses `{ once: true }` and is re-registered in `handleNewSession()` for each new audio session.
+
+**Exports from `regions.js` used by `events.js`:**
+- `Regions` — the CRUD object
+- `renderRegionsList` — called by wavesurfer.js
+- `openTimeEditor` — called indirectly via region list events
+- `closeAllMiniPlayers` — called by `handleNewSession()` to stop all inline audio elements
 
 ---
 
@@ -219,9 +225,36 @@ From top to bottom inside `.waveform-card`:
 [waveform-hint]       Instruction text
 ```
 
+**Playback bar layout** (inside `.playback-bar`):
+```
+[skip-back] [play-btn] [skip-fwd] [time-current] [seek-bar] [time-total]
+[volume-wrap] [speed-wrap] [preview-regions-btn]
+```
+
+The **speed control** (`#speed-slider`) calls `ws.setPlaybackRate(rate)` directly. Range: 0.1× – 2×, step 0.05. The `#speed-reset-btn` badge shows the current rate and glows cyan when not at 1×. Speed resets to 1× on new session.
+
 **Timeline scroll sync:** The `#timeline-mount` div has `overflow-x: scroll` with hidden scrollbar. `WS.init()` listens to `ws.on("scroll", scrollLeft => ...)` and sets `timelineMount.scrollLeft = scrollLeft`.
 
 **Minimap:** Uses WaveSurfer's `MinimapPlugin` imported from CDN. Container is `#minimap-mount`. Shows regions and allows click-to-seek without affecting zoom level.
+
+---
+
+## Region Mini-Player
+
+Each cut region in the list has a ▶ button that opens an **inline mini-player** directly below that row. It is completely independent from WaveSurfer.
+
+**How it works:**
+- Clicking ▶ on a region calls `_openMiniPlayer(id)` in `regions.js`
+- A new `HTMLAudioElement` is created with `src = /api/audio/${State.filename}` (the same source MP3)
+- `audio.currentTime` is set to `region.start`, then `audio.play()` is called
+- A `timeupdate` listener watches for `currentTime >= region.end` and pauses + resets automatically
+- Only one mini-player can be open at a time — opening a second closes the first
+
+**Key implementation details:**
+- `_miniAudios: Map<id, HTMLAudioElement>` — module-level map storing one Audio element per region
+- `closeAllMiniPlayers()` — exported from `regions.js`, called by `handleNewSession()` in `events.js`
+- No backend endpoint needed — uses the already-streamed source MP3 with seek
+- The `.region-miniplayer` `<li>` is rendered alongside every `.region-item` `<li>` and toggled with `.hidden`
 
 ---
 
@@ -235,6 +268,20 @@ From top to bottom inside `.waveform-card`:
 6. User listens with a custom HTML5 audio player (NOT WaveSurfer)
 7. **Save MP3** → `POST /api/save_preview` → folder picker → copy file → done
 8. **Continue Editing** → `UI.hidePreviewModal()` → all cut regions remain intact
+
+---
+
+## Responsive Layout System
+
+Three breakpoints in `style.css`:
+
+| Breakpoint | Target | Key changes |
+|---|---|---|
+| Default | Desktop (> 900px) | `max-width: 1560px`, `padding: clamp(16px, 4vw, 56px)` |
+| `≤ 900px` | Tablet | Controls wrap, filename input narrows, seek bar full-width |
+| `≤ 640px` | Mobile | Everything stacks, minimap hidden, speed control full-width row, shortcuts modal single-column |
+
+The app shell uses `padding: 32px clamp(16px, 4vw, 56px) 80px` so padding scales fluidly with the viewport. The track title uses `max-width: clamp(160px, 25vw, 400px)` and the output filename input uses `flex: 1 1 120px` so both shrink gracefully.
 
 ---
 
@@ -294,6 +341,12 @@ FFmpeg's structured progress output is captured from stdout using `-progress pip
 **7. Loop uses requestAnimationFrame, not setInterval**
 The loop watcher uses `requestAnimationFrame` for smooth, low-latency region boundary detection. It stores the RAF ID in `State._loopRAF` and is cancelled by `_stopLoop()`.
 
+**8. Region mini-player reuses the source MP3 stream — no backend roundtrip**
+Instead of generating a new clip file per region, the mini-player loads `/api/audio/<uuid>.mp3` (already being served) and uses `currentTime` seeking. This is instant and avoids FFmpeg overhead for short preview clips.
+
+**9. Filename input uses `flex: 1 1 120px` not a fixed width**
+This lets it shrink when the editor controls row is space-constrained (tablet/mobile). Never set a fixed `width` on `.output-filename-input` — it will break the responsive layout.
+
 ---
 
 ## Things That Will Break If You're Not Careful
@@ -311,6 +364,10 @@ The loop watcher uses `requestAnimationFrame` for smooth, low-latency region bou
 6. **Not re-registering the `ws-ready` listener in `handleNewSession()`** — the second audio load won't trigger session restore. The listener uses `{ once: true }` and must be re-added each time.
 
 7. **The `Preview` object in `wavesurfer.js`** is exported but no longer used. Do not call it. The new preview flow is entirely in `events.js` → `api.js` → `app.py`.
+
+8. **Forgetting to call `closeAllMiniPlayers()` on new session** — orphaned `Audio` elements will keep streaming the source MP3 in the background after cleanup. Always call it in `handleNewSession()`.
+
+9. **Removing a region without closing its mini-player** — `Regions._remove()` deletes from `regionMap` but does not clean up `_miniAudios`. If you add code that removes regions outside the normal flow, call `_closeMiniPlayer(id)` first.
 
 ---
 
