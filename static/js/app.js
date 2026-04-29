@@ -23,7 +23,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initEvents();
   initUploadTab();
   initWaveformCursor();
-  updateZoomUI(1);              // paint the slider fill at the default zoom level
+  updateZoomUI(0);              // paint the slider fill at the default zoom (position 0 = 1×)
   UI.refreshHistoryButtons();
   UI.updateExportButton();
   console.log(

@@ -71,6 +71,9 @@ export const WS = {
     ws.on("ready", () => {
       UI.showStep("step-editor");
       UI.showToast("Audio loaded — start adding regions!", "success");
+      // Calibrate zoom scale based on actual container width + audio duration
+      // so slider position 0 is always visually "just zoomed in"
+      calibrateZoomScale();
       // Notify events.js so it can restore any saved session for this file
       document.dispatchEvent(new CustomEvent("ws-ready"));
     });
@@ -264,23 +267,73 @@ export function initWaveformCursor() {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   ZOOM UI  –  slider fill + level badge
+   ZOOM UI  –  logarithmic slider ↔ zoom conversion + UI update
 ═══════════════════════════════════════════════════════════════ */
 
+const _ZOOM_MAX = 2000;
+
 /**
- * Update the zoom slider's filled track gradient and the "25×" badge.
- * Call whenever the zoom value changes.
+ * Dynamic minimum zoom — set after audio loads based on container width
+ * and audio duration. Ensures position 0 on the slider is always the
+ * "just starts to zoom" point regardless of audio length.
+ *
+ * For a 60s audio in a 1400px container: naturalFit ≈ 23 px/sec,
+ * so _zoomMin is set to ~24 and the entire slider is visually useful.
  */
-export function updateZoomUI(val) {
+let _zoomMin = 1;
+
+/**
+ * Called once when audio is ready. Computes the natural "fit to view"
+ * pixels-per-second and sets it as the slider's minimum zoom.
+ */
+export function calibrateZoomScale() {
+  const wfEl = document.getElementById("waveform-mount");
+  if (!wfEl || !State.duration) return;
+  // px/sec needed to exactly fill the container — anything below this
+  // is visually identical to "fit to view", so start just above it
+  const naturalFit = wfEl.offsetWidth / State.duration;
+  _zoomMin = Math.max(1, Math.ceil(naturalFit) + 1);
+}
+
+/**
+ * Convert a slider position (0–100) → actual zoom px/sec (log scale).
+ *   s=0   → _zoomMin  (just above fit-to-view, always visually zoomed)
+ *   s=50  → geometric midpoint between _zoomMin and 2000
+ *   s=100 → 2000
+ */
+export function sliderToZoom(s) {
+  const logMin = Math.log(_zoomMin);
+  const logMax = Math.log(_ZOOM_MAX);
+  return Math.round(Math.exp(logMin + (s / 100) * (logMax - logMin)));
+}
+
+/**
+ * Convert an actual zoom value → slider position (0–100).
+ */
+export function zoomToSlider(z) {
+  const logMin  = Math.log(_zoomMin);
+  const logMax  = Math.log(_ZOOM_MAX);
+  const clamped = Math.max(_zoomMin, Math.min(_ZOOM_MAX, z));
+  return ((Math.log(clamped) - logMin) / (logMax - logMin)) * 100;
+}
+
+/**
+ * Paint the slider gradient and update the zoom badge.
+ * @param {number} sliderPos  – current slider value (0–100)
+ */
+export function updateZoomUI(sliderPos) {
   const slider = document.getElementById("zoom-slider");
   if (!slider) return;
-  const pct = ((val - +slider.min) / (+slider.max - +slider.min)) * 100;
-  slider.style.background = `linear-gradient(90deg,
-    var(--primary) 0%, var(--accent) ${pct}%,
-    rgba(255,255,255,.12) ${pct}%, rgba(255,255,255,.12) 100%)`;
 
+  slider.style.background = `linear-gradient(90deg,
+    var(--primary) 0%, var(--accent) ${sliderPos}%,
+    rgba(255,255,255,.12) ${sliderPos}%, rgba(255,255,255,.12) 100%)`;
+
+  const zoom  = sliderToZoom(sliderPos);
   const badge = document.getElementById("zoom-level-badge");
-  if (badge) badge.textContent = val >= 1000 ? `${(val / 1000).toFixed(1)}k×` : `${val}×`;
+  if (badge) badge.textContent = zoom >= 1000
+    ? `${(zoom / 1000).toFixed(1)}k×`
+    : `${zoom}×`;
 }
 
 /* ══════════════════════════════════════════════════════════════

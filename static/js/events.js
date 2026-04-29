@@ -9,7 +9,8 @@
 
 import { State, History }                        from "./state.js";
 import { Regions, closeAllMiniPlayers }          from "./regions.js";
-import { WS, loadEditor, updateZoomUI }          from "./wavesurfer.js";
+import { WS, loadEditor, updateZoomUI,
+         sliderToZoom, calibrateZoomScale }      from "./wavesurfer.js";
 import { UI }                                    from "./ui.js";
 import { API }                                   from "./api.js";
 import { clearSelectedFile }                     from "./upload.js";
@@ -132,37 +133,29 @@ export function initEvents() {
     WS.seek(pct * State.duration);
   });
 
-  // ── Step 3: Editor — zoom ─────────────────────────────────────
+  // ── Step 3: Editor — zoom (logarithmic scale, slider pos 0–100) ──
   const zoomSlider = document.getElementById("zoom-slider");
 
-  zoomSlider.addEventListener("input", () => {
-    const val = +zoomSlider.value;
-    WS.zoom(val);
-    updateZoomUI(val);
-  });
+  // Helper: apply slider position → WaveSurfer zoom + UI update
+  const _applyZoom = pos => {
+    const clamped = Math.max(0, Math.min(100, pos));
+    zoomSlider.value = clamped;
+    WS.zoom(sliderToZoom(clamped));
+    updateZoomUI(clamped);
+  };
 
-  document.getElementById("zoom-in-btn").addEventListener("click", () => {
-    const cur  = +zoomSlider.value;
-    const step = cur < 50 ? 10 : cur < 200 ? 30 : cur < 600 ? 80 : 200;
-    const val  = Math.min(cur + step, 2000);
-    zoomSlider.value = val;
-    WS.zoom(val);
-    updateZoomUI(val);
-  });
+  zoomSlider.addEventListener("input", () => _applyZoom(+zoomSlider.value));
 
-  document.getElementById("zoom-out-btn").addEventListener("click", () => {
-    const cur  = +zoomSlider.value;
-    const step = cur <= 50 ? 10 : cur <= 200 ? 30 : cur <= 600 ? 80 : 200;
-    const val  = Math.max(cur - step, 1);
-    zoomSlider.value = val;
-    WS.zoom(val);
-    updateZoomUI(val);
-  });
+  // Zoom-in / zoom-out buttons: move 6 positions on the 0-100 log scale
+  // (equal steps in log space = proportional zoom changes)
+  document.getElementById("zoom-in-btn").addEventListener("click",  () => _applyZoom(+zoomSlider.value + 6));
+  document.getElementById("zoom-out-btn").addEventListener("click", () => _applyZoom(+zoomSlider.value - 6));
 
+  // Fit button: reset to natural fit-to-view (outside slider range, below _zoomMin)
   document.getElementById("reset-zoom-btn").addEventListener("click", () => {
-    zoomSlider.value = 1;
-    WS.zoom(1);
-    updateZoomUI(1);
+    zoomSlider.value = 0;
+    WS.zoom(0);          // 0 tells WaveSurfer to fit the waveform to the container
+    updateZoomUI(0);
   });
 
   // ── Fullscreen ────────────────────────────────────────────────
@@ -513,9 +506,10 @@ export async function handleNewSession() {
   document.getElementById("regions-count").textContent = "0";
   document.getElementById("regions-empty").classList.remove("hidden");
 
-  // Reset zoom
+  // Reset zoom slider to 0 (fit to view)
   const zs = document.getElementById("zoom-slider");
-  if (zs) { zs.value = 1; updateZoomUI(1); }
+  if (zs) { zs.value = 0; updateZoomUI(0); }
+  if (State.ws) WS.zoom(0);
 
   // Reset time displays
   const phEl = document.getElementById("wf-playhead-time");
