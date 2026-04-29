@@ -402,7 +402,7 @@ function _startPolling(taskId) {
 
 async function handleExport() {
   const sorted = Regions.getSorted();
-  if (!sorted.length) { UI.showToast("No regions to export.", "info"); return; }
+  // sorted may be empty — that's fine; backend will export the full audio as-is
 
   const btn        = document.getElementById("export-btn");
   const customName = (document.getElementById("output-filename-input")?.value || "").trim();
@@ -570,10 +570,7 @@ function _onFullscreenChange() {
 
 async function _generatePreview() {
   const sorted = Regions.getSorted();
-  if (!sorted.length) {
-    UI.showToast("Add at least one cut region first.", "info");
-    return;
-  }
+  // sorted may be empty — backend will preview the full audio as-is
 
   const btn = document.getElementById("preview-regions-btn");
   btn.disabled = true;

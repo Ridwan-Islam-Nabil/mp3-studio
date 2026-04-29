@@ -74,10 +74,11 @@ export const UI = {
   /* ── Export / region count button ────────────────────────── */
 
   updateExportButton() {
-    const has = State.regionMap.size > 0;
-    document.getElementById("export-btn").disabled           = !has;
-    document.getElementById("preview-regions-btn").disabled  = !has;
-    document.getElementById("clear-regions-btn").style.display = has ? "inline-flex" : "none";
+    const hasAudio   = !!State.filename;   // audio loaded → always enable export + preview
+    const hasRegions = State.regionMap.size > 0;
+    document.getElementById("export-btn").disabled          = !hasAudio;
+    document.getElementById("preview-regions-btn").disabled = !hasAudio;
+    document.getElementById("clear-regions-btn").style.display = hasRegions ? "inline-flex" : "none";
   },
 
   /* ── Region list highlighting ─────────────────────────────── */

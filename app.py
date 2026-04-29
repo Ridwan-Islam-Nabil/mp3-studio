@@ -362,8 +362,7 @@ def api_export():
     # ── Validation ─────────────────────────────────────────────────────────────
     if not _valid_mp3(filename):
         return jsonify({"error": "Invalid filename."}), 400
-    if not cut_regions:
-        return jsonify({"error": "No cut regions provided."}), 400
+    # cut_regions may be empty — that means "keep everything" (full audio export)
 
     source = TEMP_DIR / filename
     if not source.exists():
@@ -560,8 +559,7 @@ def api_preview_export():
 
     if not _valid_mp3(filename):
         return jsonify({"error": "Invalid filename."}), 400
-    if not cut_regions:
-        return jsonify({"error": "No cut regions provided."}), 400
+    # cut_regions may be empty — preview the full audio as-is
 
     source = TEMP_DIR / filename
     if not source.exists():
@@ -742,9 +740,7 @@ def api_export_stream():
         if not _valid_mp3(filename):
             yield _ev({"type": "error", "message": "Invalid filename."})
             return
-        if not cut_regions:
-            yield _ev({"type": "error", "message": "No cut regions provided."})
-            return
+        # cut_regions may be empty — export the full audio as-is
 
         source = TEMP_DIR / filename
         if not source.exists():

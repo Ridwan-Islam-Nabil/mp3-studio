@@ -72,8 +72,9 @@ export const WS = {
       UI.showStep("step-editor");
       UI.showToast("Audio loaded — start adding regions!", "success");
       // Calibrate zoom scale based on actual container width + audio duration
-      // so slider position 0 is always visually "just zoomed in"
       calibrateZoomScale();
+      // Enable export + preview now that audio is loaded (no cuts required)
+      UI.updateExportButton();
       // Notify events.js so it can restore any saved session for this file
       document.dispatchEvent(new CustomEvent("ws-ready"));
     });
