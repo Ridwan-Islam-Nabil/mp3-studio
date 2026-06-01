@@ -573,9 +573,26 @@
           <span id="pv-time-total"   class="pv-time pv-time--total">0:00</span>
         </div>
 
-        <!-- Play / Pause -->
+        <!-- Play / Pause + Volume -->
         <div class="pv-play-row">
-          <button id="pv-play-btn" class="btn btn-play pv-play-btn" title="Play / Pause (Space)">
+          <!-- Volume left -->
+          <div class="pv-volume-wrap">
+            <button id="pv-mute-btn" class="pv-mute-btn" title="Mute / Unmute">
+              <svg id="pv-vol-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+              </svg>
+              <svg id="pv-vol-muted-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="hidden">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+            </button>
+            <input id="pv-volume-slider" type="range" min="0" max="1" step="0.05" value="1"
+                   class="pv-volume-range" aria-label="Preview volume" />
+          </div>
+
+          <button id="pv-play-btn" class="btn btn-play pv-play-btn" title="Play / Pause">
             <svg id="pv-play-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
               <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
@@ -584,7 +601,27 @@
               <rect x="14" y="4" width="4" height="16"/>
             </svg>
           </button>
+
+          <!-- Spacer to keep play button centred -->
+          <div class="pv-volume-wrap" style="visibility:hidden" aria-hidden="true">
+            <button class="pv-mute-btn"></button>
+            <input type="range" class="pv-volume-range" />
+          </div>
         </div>
+      </div>
+
+      <!-- Save-as filename -->
+      <p class="pv-saveas-label">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle;margin-right:4px">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        Save as — edit the filename below before saving
+      </p>
+      <div class="pv-filename-wrap">
+        <input id="pv-filename-input" type="text" class="pv-filename-input"
+               placeholder="Output filename" spellcheck="false" autocomplete="off" />
+        <span class="pv-filename-ext">.mp3</span>
       </div>
 
       <!-- Actions -->
@@ -716,7 +753,7 @@
     </div>
   </div>
 
-  <!-- Main JS as ES module – v14 -->
-  <script type="module" src="/static/js/app.js?v=14"></script>
+  <!-- Main JS as ES module – v19 -->
+  <script type="module" src="/static/js/app.js?v=19"></script>
 </body>
 </html>

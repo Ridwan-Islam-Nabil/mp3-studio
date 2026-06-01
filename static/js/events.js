@@ -620,7 +620,11 @@ async function _savePreview() {
   </svg> Saving…`;
 
   try {
-    const customName = (document.getElementById("output-filename-input")?.value || "").trim();
+    // Prefer the modal's own filename input; fall back to the editor toolbar input
+    const customName = (
+      document.getElementById("pv-filename-input")?.value ||
+      document.getElementById("output-filename-input")?.value || ""
+    ).trim();
     const result = await API.savePreview(State.currentPreviewFile, State.title, customName);
 
     if (result.cancelled) {
@@ -693,6 +697,30 @@ function _initPreviewPlayer() {
     if (!audio.duration) return;
     if (e.key === "ArrowLeft")  audio.currentTime = Math.max(0, audio.currentTime - 5);
     if (e.key === "ArrowRight") audio.currentTime = Math.min(audio.duration, audio.currentTime + 5);
+  });
+
+  // ── Volume slider + mute button ────────────────────────────────
+  const volSlider   = document.getElementById("pv-volume-slider");
+  const muteBtn     = document.getElementById("pv-mute-btn");
+  const volIcon     = document.getElementById("pv-vol-icon");
+  const mutedIcon   = document.getElementById("pv-vol-muted-icon");
+
+  const _updateVolIcons = () => {
+    const muted = audio.muted || audio.volume === 0;
+    volIcon  .classList.toggle("hidden",  muted);
+    mutedIcon.classList.toggle("hidden", !muted);
+  };
+
+  volSlider.addEventListener("input", () => {
+    audio.volume = +volSlider.value;
+    if (audio.muted && audio.volume > 0) audio.muted = false;
+    _updateVolIcons();
+  });
+
+  muteBtn.addEventListener("click", () => {
+    audio.muted = !audio.muted;
+    if (!audio.muted) volSlider.value = audio.volume || 1;
+    _updateVolIcons();
   });
 }
 

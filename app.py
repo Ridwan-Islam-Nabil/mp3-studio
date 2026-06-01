@@ -379,17 +379,12 @@ def api_export():
         return jsonify({"error": "Nothing left to keep — your cut regions cover the entire audio."}), 400
 
     # ── Ask where to save ──────────────────────────────────────────────────────
-    save_dir = _pick_folder()
-    if save_dir is None:
+    # ── Open Save As dialog — user picks folder AND edits filename ────────────
+    suggested   = f"{_safe_name(title)}.mp3"
+    output_path_str = _pick_save_path(suggested)
+    if output_path_str is None:
         return jsonify({"cancelled": True})
-
-    # ── Resolve unique output path ─────────────────────────────────────────────
-    stem        = _safe_name(title)
-    output_path = Path(save_dir) / f"{stem}.mp3"
-    counter     = 1
-    while output_path.exists():
-        output_path = Path(save_dir) / f"{stem}_{counter}.mp3"
-        counter += 1
+    output_path = Path(output_path_str)
 
     try:
         if len(keep_regions) == 1:
@@ -465,8 +460,12 @@ def _probe_duration(path: Path) -> float:
         return 0.0
 
 
-def _pick_folder() -> str | None:
-    """Open the OS-native folder-picker dialog and return the chosen path."""
+def _pick_save_path(suggested_name: str) -> str | None:
+    """
+    Open a native Save As dialog pre-filled with suggested_name.
+    Returns the full file path chosen by the user, or None if cancelled.
+    The user can edit the filename and choose any folder in one step.
+    """
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -476,17 +475,19 @@ def _pick_folder() -> str | None:
         root.attributes("-topmost", True)
         root.update()
 
-        folder = filedialog.askdirectory(
-            title="Choose where to save your MP3",
+        filepath = filedialog.asksaveasfilename(
+            title="Save MP3",
+            initialfile=suggested_name,
+            defaultextension=".mp3",
+            filetypes=[("MP3 Audio", "*.mp3"), ("All files", "*.*")],
             parent=root,
         )
         root.destroy()
-        return folder or None
+        return filepath or None
 
     except Exception:
-        # Fallback silently to ~/Downloads if tkinter is unavailable
-        fallback = Path.home() / "Downloads"
-        fallback.mkdir(parents=True, exist_ok=True)
+        # Fallback: save to ~/Downloads with the suggested name
+        fallback = Path.home() / "Downloads" / suggested_name
         return str(fallback)
 
 
@@ -630,16 +631,11 @@ def api_save_preview():
     if not preview_path.exists():
         return jsonify({"error": "Preview file not found – please regenerate."}), 404
 
-    save_dir = _pick_folder()
-    if save_dir is None:
+    suggested       = f"{_safe_name(title)}.mp3"
+    output_path_str = _pick_save_path(suggested)
+    if output_path_str is None:
         return jsonify({"cancelled": True})
-
-    stem        = _safe_name(title)
-    output_path = Path(save_dir) / f"{stem}.mp3"
-    counter     = 1
-    while output_path.exists():
-        output_path = Path(save_dir) / f"{stem}_{counter}.mp3"
-        counter += 1
+    output_path = Path(output_path_str)
 
     try:
         import shutil
@@ -755,20 +751,15 @@ def api_export_stream():
             yield _ev({"type": "error", "message": "Nothing left to keep — cuts cover the entire audio."})
             return
 
-        # ── Open folder picker (blocking until user chooses) ─────────────────
+        # ── Open Save As dialog — user picks folder AND edits filename ──────
         yield _ev({"type": "progress", "pct": 5, "msg": "Opening save dialog…"})
 
-        save_dir = _pick_folder()
-        if save_dir is None:
+        suggested       = f"{_safe_name(title)}.mp3"
+        output_path_str = _pick_save_path(suggested)
+        if output_path_str is None:
             yield _ev({"type": "cancelled"})
             return
-
-        stem        = _safe_name(title)
-        output_path = Path(save_dir) / f"{stem}.mp3"
-        counter     = 1
-        while output_path.exists():
-            output_path = Path(save_dir) / f"{stem}_{counter}.mp3"
-            counter += 1
+        output_path = Path(output_path_str)
 
         yield _ev({"type": "progress", "pct": 15, "msg": "Exporting…"})
 

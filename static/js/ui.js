@@ -122,6 +122,11 @@ export const UI = {
     // Populate track info
     document.getElementById("pv-track-title").textContent   = State.title || "Audio";
     document.getElementById("pv-track-channel").textContent = State.channel || "";
+
+    // Pre-fill filename from the editor toolbar input (user may have already typed one)
+    const pvFn = document.getElementById("pv-filename-input");
+    const edFn = document.getElementById("output-filename-input");
+    if (pvFn) pvFn.value = edFn?.value || State.title || "";
     document.getElementById("pv-segments-badge").textContent =
       `${keptSegments} segment${keptSegments !== 1 ? "s" : ""} kept`;
     document.getElementById("pv-duration-badge").textContent = _fmtTime(previewDuration);
@@ -147,6 +152,10 @@ export const UI = {
     if (audio) { audio.pause(); audio.src = ""; }
     State.currentPreviewFile = null;
     State.previewActive      = false;
+    // Sync modal filename back to the editor toolbar input
+    const pvFn = document.getElementById("pv-filename-input");
+    const edFn = document.getElementById("output-filename-input");
+    if (pvFn && edFn && pvFn.value.trim()) edFn.value = pvFn.value.trim();
     // Reset play icon so it's clean next time
     document.getElementById("pv-play-icon") ?.classList.remove("hidden");
     document.getElementById("pv-pause-icon")?.classList.add("hidden");

@@ -30,7 +30,7 @@ bash run.sh
 
 Server starts at `http://localhost:5000`. Static files are never cached (`SEND_FILE_MAX_AGE_DEFAULT = 0`).
 
-**Every time you change a JS or CSS file, bump the `?v=N` cache-buster** on the script tag in `templates/index.html`. Current version: `?v=14`.
+**Every time you change a JS or CSS file, bump the `?v=N` cache-buster** on the script tag in `templates/index.html`. Current version: `?v=19`.
 
 ---
 
@@ -180,6 +180,8 @@ All in `app.py`. Security: every filename is validated with regex before use.
 
 **Custom title:** `/api/export`, `/api/export_stream`, and `/api/save_preview` all accept an optional `custom_title` field in the request body. If provided, it overrides `title` for the output filename.
 
+**Save As dialog:** All three save endpoints use `_pick_save_path(suggested_name)` (NOT the old `_pick_folder()`). This opens a native OS `asksaveasfilename` dialog pre-filled with the suggested filename. The user navigates to any folder AND can rename the file in the dialog — one step instead of two. Empty cut regions are allowed; `_invert_regions([], duration)` returns the full audio as a single keep region.
+
 **SSE Export helpers:**
 - `_ffmpeg_trim_progress(src, dst, start, end, seg_dur, pct_start, pct_end)` — runs FFmpeg with `-progress pipe:1 -nostats` and yields integer progress values by parsing `out_time_ms=` lines
 - `_ffmpeg_concat_progress(concat_list, dst, total_dur, pct_start, pct_end)` — same for the concat step
@@ -237,6 +239,13 @@ The **speed control** (`#speed-slider`) calls `ws.setPlaybackRate(rate)` directl
 
 **Minimap:** Uses WaveSurfer's `MinimapPlugin` imported from CDN. Container is `#minimap-mount`. Shows regions and allows click-to-seek without affecting zoom level.
 
+**Zoom scale — logarithmic, dynamically calibrated:**
+The zoom slider uses a 0–100 position scale mapped to a log curve so every equal drag feels proportionally the same. Key functions in `wavesurfer.js`:
+- `calibrateZoomScale()` — called inside `ws.on("ready")`. Measures `containerWidth / duration` to find the natural fit-to-view px/sec, then sets `_zoomMin` just above that threshold. This eliminates the "dead zone" at the bottom of the slider where values were too low to produce any visible zoom.
+- `sliderToZoom(s)` — converts slider position 0–100 → actual px/sec (log curve from `_zoomMin` to 2000)
+- `zoomToSlider(z)` — inverse: px/sec → slider position 0–100
+- The **Fit** button calls `WS.zoom(0)` to truly fit the waveform to the container (below the slider's minimum), then resets the slider to 0.
+
 ---
 
 ## Region Mini-Player
@@ -265,9 +274,12 @@ Each cut region in the list has a ▶ button that opens an **inline mini-player*
 3. Backend merges kept regions → saves `prev_xxx.mp3` to temp folder
 4. Returns `{ preview_filename, preview_duration, kept_segments }`
 5. `UI.showPreviewModal()` opens the modal, loads audio via `GET /api/preview_audio/`
-6. User listens with a custom HTML5 audio player (NOT WaveSurfer)
-7. **Save MP3** → `POST /api/save_preview` → folder picker → copy file → done
-8. **Continue Editing** → `UI.hidePreviewModal()` → all cut regions remain intact
+6. User listens with a custom HTML5 audio player (NOT WaveSurfer) — includes seek bar, volume slider with mute toggle (`#pv-volume-slider`, `#pv-mute-btn`), and play/pause
+7. The `#pv-filename-input` field is pre-filled with the track title (or whatever the user typed in the editor toolbar). The user can edit it before saving.
+8. **Save MP3** → `POST /api/save_preview` → `_pick_save_path()` opens a native **Save As** dialog (not folder-only) with the filename pre-filled → user navigates to folder AND can rename → copy file → done
+9. **Continue Editing** → `UI.hidePreviewModal()` → all cut regions remain intact; the filename is synced back to the editor toolbar input
+
+**No cuts required:** Export and Preview are enabled as soon as audio loads. With zero cut regions, `_invert_regions([], duration)` returns the full audio as a single keep region.
 
 ---
 
@@ -346,6 +358,12 @@ Instead of generating a new clip file per region, the mini-player loads `/api/au
 
 **9. Filename input uses `flex: 1 1 120px` not a fixed width**
 This lets it shrink when the editor controls row is space-constrained (tablet/mobile). Never set a fixed `width` on `.output-filename-input` — it will break the responsive layout.
+
+**10. `_pick_save_path()` uses `asksaveasfilename`, not `askdirectory`**
+The old `_pick_folder()` opened a folder-only picker — users could not see or edit the output filename. `asksaveasfilename` opens a full Save As dialog with the suggested name pre-filled so users can rename and choose a folder in one step.
+
+**11. Zoom scale is calibrated per-audio, not fixed**
+A fixed log scale (e.g. 1–2000 px/sec) creates a large dead zone at the low end for short audio clips, because values below `containerWidth / duration` produce no visible zoom. `calibrateZoomScale()` measures the actual natural fit zoom after each audio loads and sets `_zoomMin` just above it, so position 0 on the slider always produces a visible zoom regardless of audio length.
 
 ---
 
