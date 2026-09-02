@@ -165,6 +165,12 @@ export default function LandingPage() {
 
         {/* ── Screenshot 1: Main editor ── */}
         <section style={{ padding: "0 clamp(16px, 5vw, 64px) 80px", maxWidth: 1200, margin: "0 auto" }}>
+          <h2 style={{ textAlign: "center", fontSize: "clamp(22px, 3.5vw, 32px)", fontWeight: 800, marginBottom: 12 }}>
+            Multi-cut waveform editor
+          </h2>
+          <p style={{ textAlign: "center", color: "var(--text-muted)", marginBottom: 32, fontSize: 15 }}>
+            Mark multiple sections to remove in a single pass — no re-uploading, no repeating the process.
+          </p>
           <div className="glass" style={{ padding: 8, borderRadius: 14, overflow: "hidden" }}>
             <Image
               src="/screenshots/editor-main.png"
@@ -340,6 +346,10 @@ export default function LandingPage() {
           textAlign: "center", color: "var(--text-dim)", fontSize: 13,
         }}>
           MP3 Studio — Free online audio editor. No server. No sign-up. No size limit.
+          <br />
+          <span style={{ marginTop: 6, display: "inline-block" }}>
+            © {new Date().getFullYear()} RIN Production. All rights reserved.
+          </span>
         </footer>
       </div>
     </>
