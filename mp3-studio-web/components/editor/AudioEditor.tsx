@@ -301,13 +301,9 @@ export default function AudioEditor() {
         rp,
         TimelinePlugin.create({
           container: timelineRef.current,
-          primaryColor:       "#475569",
-          secondaryColor:     "#334155",
-          primaryFontColor:   "#94a3b8",
-          secondaryFontColor: "#64748b",
           timeInterval: 30,
           primaryLabelInterval: 5,
-          style: { fontSize: "11px" },
+          style: { fontSize: "11px", color: "#94a3b8" },
         }),
         MinimapPlugin.create({
           container: minimapRef.current,
@@ -373,8 +369,9 @@ export default function AudioEditor() {
       dispatchHist({ type: "push", snap: next.map(({ id, start, end }) => ({ id, start, end })) });
     });
 
-    rp.on("region-dblclick", (region) => {
+    rp.on("region-double-clicked", (region) => {
       if (isRestoringRef.current) return;
+      if (!region) return;
       region.remove();
       const next = regionsRef.current.filter((r) => r.id !== region.id);
       regionsRef.current = next;
