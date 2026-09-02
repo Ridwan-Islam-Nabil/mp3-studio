@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import FeedbackWidget from "@/components/FeedbackWidget";
 
 // JSON-LD structured data — helps Google understand what this page is
 const jsonLd = {
@@ -65,6 +66,7 @@ const steps = [
 export default function LandingPage() {
   return (
     <>
+      <FeedbackWidget />
       {/* Structured data for SEO */}
       <script
         type="application/ld+json"
