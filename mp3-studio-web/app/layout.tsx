@@ -32,6 +32,10 @@ export const metadata: Metadata = {
     follow: true,
     googleBot: { index: true, follow: true },
   },
+  icons: {
+    icon: "/thumbnail.png",
+    apple: "/icon-192.png",
+  },
   verification: {
     google: "08jcNsbiyfgd_rA5f2pJ-sTrjVWzsVCFOmcgoZd7J2c",
   },

@@ -348,7 +348,8 @@ export default function LandingPage() {
           MP3 Studio — Free online audio editor. No server. No sign-up. No size limit.
           <br />
           <span style={{ marginTop: 6, display: "inline-block" }}>
-            © {new Date().getFullYear()} RIN Production. All rights reserved.
+            © {new Date().getFullYear()} RIN Production. All rights reserved. &nbsp;·&nbsp;{" "}
+            <Link href="/blog" style={{ color: "var(--text-dim)", textDecoration: "underline" }}>Blog</Link>
           </span>
         </footer>
       </div>
