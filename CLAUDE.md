@@ -5,6 +5,19 @@
 
 ---
 
+## This Repo Contains Two Apps
+
+| Folder | What | Docs |
+|---|---|---|
+| repo root (`app.py`, `static/`, `templates/`) | **Local app** — Flask + vanilla JS, runs on the user's machine, includes YouTube download | this file |
+| `mp3-studio-web/` | **Hosted web app** — Next.js on Vercel, FFmpeg runs in the browser (WebAssembly), upload only, plus landing page/blog/SEO | `mp3-studio-web/CLAUDE.md` |
+
+They share the visual design and the "cut regions = parts to delete" convention but **no code**.
+A feature added to one does not appear in the other. **The rest of this file describes the local
+app only.** Read `mp3-studio-web/CLAUDE.md` before touching anything in that folder.
+
+---
+
 ## What This Project Is
 
 A **local web application** for downloading YouTube audio or uploading local audio files, converting to MP3, and trimming them with a visual waveform editor. Works with any audio.
@@ -30,6 +43,11 @@ bash run.sh
 
 Server starts at `http://localhost:5000`. Static files are never cached (`SEND_FILE_MAX_AGE_DEFAULT = 0`).
 
+**Network exposure:** `app.run()` binds `host="0.0.0.0"`, so the app is also reachable from other
+devices on the same network, not just `localhost`. There is no authentication, and endpoints start
+yt-dlp/FFmpeg jobs and open native dialogs. Change it to `127.0.0.1` if the app should be truly
+local-only.
+
 **Every time you change a JS or CSS file, bump the `?v=N` cache-buster** on the script tag in `templates/index.html`. Current version: `?v=19`.
 
 ---
@@ -44,6 +62,7 @@ mp3-studio/
 ├── run.sh                  ← Mac/Linux launcher
 ├── CLAUDE.md               ← THIS FILE
 ├── README.md               ← User-facing documentation
+├── mp3-studio-web/         ← Separate Next.js web app (own CLAUDE.md, package.json, deploy)
 ├── templates/
 │   └── index.html          ← Single HTML page (all UI, no JS inline)
 ├── static/
