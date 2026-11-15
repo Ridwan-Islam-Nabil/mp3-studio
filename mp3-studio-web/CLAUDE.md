@@ -74,15 +74,53 @@ This app skips the server entirely:
 1. User drops a file → browser holds it in memory (never sent anywhere)
 2. On the **first Preview or Export**, `loadFFmpeg()` downloads the FFmpeg core
    (`@ffmpeg/core@0.12.6`, single-threaded UMD build, ~30 MB) from unpkg via `toBlobURL`
-3. `trimAndExport()` writes the file into FFmpeg's in-memory filesystem, re-encodes each kept
-   segment to `seg_N.mp3` (libmp3lame, VBR `-q:a 2`, 44.1 kHz), then joins them with the
-   concat demuxer (`-c copy`)
+3. `trimAndExport()` writes the file into FFmpeg's in-memory filesystem and runs **one**
+   `ffmpeg.exec` built by the pure helper `buildExportArgs()`: the input is decoded once, each
+   kept segment is cut with `atrim` + `asetpts`, a 12 ms `afade` out/in is applied at every
+   **interior** join (never at the file's start or end), the segments are joined with the
+   `concat` filter, and the result is encoded once with libmp3lame at 44.1 kHz:
+   ```
+   -i input.mp3 -filter_complex
+     "[0:a:0]atrim=end=A,asetpts=PTS-STARTPTS,afade=t=out:…[s0];
+      [0:a:0]atrim=start=B:end=C,asetpts=PTS-STARTPTS,afade=t=in:…,afade=t=out:…[s1];
+      [0:a:0]atrim=start=D,asetpts=PTS-STARTPTS,afade=t=in:…[s2];
+      [s0][s1][s2]concat=n=3:v=0:a=1[out]"
+     -map [out] -c:a libmp3lame -q:a 2 -ar 44100 -y output.mp3
+   ```
+   With zero cuts there is no filter graph (`-map 0:a:0`); a single segment gets `atrim` but no
+   fades. Segment edges at 0 / the end are left open so the output runs to the true end of the
+   stream.
 4. The result comes back as a `Blob`; the editor triggers a download via a temporary `<a download>`
 
-Progress reporting: in `AudioEditor.runFFmpeg()`, loading maps to 0–20% and trimming to 20–100%.
+**Why one filter graph (don't go back to per-segment files):** the old pipeline cut each kept
+segment with `-ss … -i` into `seg_N.mp3` and joined them with the concat demuxer + `-c copy`.
+Measured with native FFmpeg: every non-first segment started with ~105–118 ms of silence
+(MP3 input-seek), each segment also carried its encoder delay/padding, so a 30 s file with 3 cuts
+came out 126 ms too long with ~155 ms dropouts at every join, plus hard-cut clicks. The rewritten
+Xing header was fine (reported duration = decoded length). The filter graph is sample-accurate
+and encodes once.
 
-**Limits to keep in mind:** the entire source file plus every segment lives in WebAssembly
-memory, so very large/long uncompressed files (WAV, FLAC) are where this will fail first.
+**Encoder options:** `trimAndExport(file, cuts, duration, onProgress, options?)` where
+`options = { quality?: "standard" | "high", bitrateKbps?: number }`. Default `"standard"` = VBR
+`-q:a 2` (~190 kbps); `"high"` = VBR `-q:a 0` (~245 kbps); `bitrateKbps` = CBR `-b:a` (clamped
+32–320) and overrides `quality`. No UI uses this yet.
+
+**Progress reporting:** `trimAndExport` reports 0–5% while writing the input, then 5–99% from the
+`time=` field of FFmpeg's stats log divided by the expected *output* length (the library's own
+`progress` event divides by the input length, which is wrong once parts are cut), then 100%.
+In `AudioEditor.runFFmpeg()`, loading maps to 0–20% (`loadFFmpeg` reports only 0 and 100) and
+trimming to 20–100%.
+
+**Errors:** `loadFFmpeg()` wraps failures in `FFmpegLoadError`. `trimAndExport` throws if
+`exec` returns a non-zero exit code (with the last error lines from the log), and after **any**
+failure it terminates the instance so the next attempt reloads a fresh one (a wasm OOM can leave
+the heap unusable). `isLikelyOutOfMemory(e)` classifies `RangeError` / "memory access out of
+bounds" / allocation failures; the editor uses it to show a "try a shorter or compressed file"
+message.
+
+**Limits to keep in mind:** the source file, its decoded frames in flight, and the output MP3
+all live in WebAssembly memory, so very large/long uncompressed files (WAV, FLAC) are where this
+will fail first. Failures are tracked as `export_failed` (see Analytics).
 
 ### The COOP/COEP headers
 
@@ -185,8 +223,13 @@ new history entries.
 - `lib/analytics.ts` — `initPostHog()` is a no-op unless `NEXT_PUBLIC_POSTHOG_KEY` is set.
   Host defaults to `https://us.i.posthog.com` (override with `NEXT_PUBLIC_POSTHOG_HOST`).
 - All `track*()` helpers swallow errors, so calling them before init is safe.
-- Events: `file_uploaded`, `region_created`, `preview_opened`, `export_completed`, `undo_used`,
-  `redo_used`, `user_feedback`.
+- Events: `file_uploaded`, `region_created`, `preview_opened`, `export_completed`,
+  `export_failed`, `undo_used`, `redo_used`, `user_feedback`.
+- `export_failed` (`trackExportFailed`) fires from the catch blocks of `handleExport` /
+  `handlePreview` in `AudioEditor.tsx` with `{ stage: "load" | "export" | "preview", format,
+  sizeMB, durationSec, cutCount, message }`. `stage` is `"load"` when the error is an
+  `FFmpegLoadError`; `message` is truncated to 200 chars. Use it to see how often large files
+  exhaust WebAssembly memory (filter on `format` / `sizeMB` / message text).
 - **Feedback widget** sends its thumbs up/down, message and optional email as a `user_feedback`
   PostHog event. There is no other feedback backend — if PostHog is not configured, feedback goes
   nowhere.

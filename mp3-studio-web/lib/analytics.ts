@@ -60,6 +60,22 @@ export function trackExportCompleted(props: {
   track("export_completed", props);
 }
 
+/**
+ * Loading FFmpeg, exporting, or generating a preview threw.
+ * `stage` is "load" when the FFmpeg core never finished loading.
+ * `message` is truncated to 200 chars so stack-like errors don't bloat events.
+ */
+export function trackExportFailed(props: {
+  stage:       "load" | "export" | "preview";
+  format:      string;  // source file extension, "mp3", "wav", …
+  sizeMB:      number;
+  durationSec: number;
+  cutCount:    number;
+  message:     string;
+}) {
+  track("export_failed", { ...props, message: props.message.slice(0, 200) });
+}
+
 /** User opened the Preview modal */
 export function trackPreviewOpened(props: { cutCount: number }) {
   track("preview_opened", props);
