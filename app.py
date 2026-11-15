@@ -13,15 +13,22 @@ import logging
 import threading
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 from flask import Flask, request, jsonify, render_template, send_file, abort, Response, stream_with_context
-from flask_cors import CORS
 import yt_dlp
 
 
 # ── App Bootstrap ──────────────────────────────────────────────────────────────
 
+# Bind to loopback by default. Set MP3STUDIO_HOST=0.0.0.0 to opt into LAN access
+# (no authentication — anyone on the network can then start downloads/exports).
+HOST = os.environ.get("MP3STUDIO_HOST", "127.0.0.1").strip() or "127.0.0.1"
+PORT = 5000
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
 app = Flask(__name__)
-CORS(app)
+# No CORS: the frontend is served from this same origin, so cross-origin access
+# is never needed. See _block_cross_site() below.
 app.config["MAX_CONTENT_LENGTH"]       = 500 * 1024 * 1024   # 500 MB upload limit
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0                   # Never cache static files locally
 
@@ -30,7 +37,7 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0                   # Never cache stat
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 # Only show our own clean print() messages in the terminal
 
-BASE_DIR  = Path(__file__).parent
+BASE_DIR  = Path(__file__).resolve().parent
 TEMP_DIR  = BASE_DIR / "temp_audio"
 TEMP_DIR.mkdir(exist_ok=True)
 
@@ -94,6 +101,30 @@ def _valid_preview(name: str) -> bool:
     return bool(re.fullmatch(r"prev_[0-9a-f]{16}\.mp3", name))
 
 
+def _valid_url(url: str) -> bool:
+    """Only hand plain http(s) URLs to yt-dlp (no file:, ytsearch:, etc.)."""
+    parts = urlsplit(url)
+    return parts.scheme in ("http", "https") and bool(parts.netloc)
+
+
+# ── Cross-site request guard ───────────────────────────────────────────────────
+# Endpoints parse bodies with get_json(force=True), so a "simple" cross-site POST
+# (Content-Type: text/plain, no CORS preflight) from any web page could otherwise
+# start downloads, open Save dialogs or delete temp files.
+
+@app.before_request
+def _block_cross_site():
+    # DNS-rebinding guard: in loopback mode only answer to loopback Host names.
+    if HOST in _LOOPBACK_HOSTS:
+        if urlsplit(f"//{request.host}").hostname not in _LOOPBACK_HOSTS:
+            abort(403)
+    # Reject state-changing requests coming from another origin.
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin")
+        if origin is not None and urlsplit(origin).netloc != request.host:
+            abort(403)
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -111,6 +142,8 @@ def api_info():
 
     if not url:
         return jsonify({"error": "URL is required"}), 400
+    if not _valid_url(url):
+        return jsonify({"error": "Please enter a valid http(s) video URL."}), 400
 
     ydl_opts = {
         "quiet": True,
@@ -153,6 +186,8 @@ def api_download():
 
     if not url:
         return jsonify({"error": "URL is required"}), 400
+    if not _valid_url(url):
+        return jsonify({"error": "Please enter a valid http(s) video URL."}), 400
 
     # ── Auto-delete the previous session's temp file ───────────────────────────
     if _last_filename and _valid_mp3(_last_filename):
@@ -244,6 +279,9 @@ def _download_worker(task_id: str, url: str):
         )
 
     except Exception as exc:
+        # Remove partial downloads / intermediate files (.part, .webm, .mp3 …)
+        for leftover in TEMP_DIR.glob(f"{task_id}.*"):
+            leftover.unlink(missing_ok=True)
         _task_update(task_id, status="error", progress=0, message=str(exc))
 
 
@@ -322,8 +360,11 @@ def api_upload():
                 capture_output=True,
             )
         except subprocess.CalledProcessError as exc:
-            raw_path.unlink(missing_ok=True)
-            return jsonify({"error": "Conversion failed: " + exc.stderr.decode(errors="replace")}), 500
+            mp3_path.unlink(missing_ok=True)   # drop any partial output
+            stderr = exc.stderr.decode(errors="replace")[-2000:]
+            return jsonify({"error": "Conversion failed: " + stderr}), 500
+        except FileNotFoundError:
+            return jsonify({"error": "FFmpeg is not installed – cannot convert this format."}), 500
         finally:
             raw_path.unlink(missing_ok=True)
 
@@ -855,17 +896,32 @@ def api_cleanup():
 if __name__ == "__main__":
     import webbrowser, time
 
+    # Open via localhost — 0.0.0.0 is not a browsable address, and keeping the
+    # same origin as before preserves saved sessions/theme in localStorage.
+    # Only a specific non-loopback bind address (e.g. a LAN IP) is opened as-is.
+    if HOST in _LOOPBACK_HOSTS | {"0.0.0.0", "::"}:
+        local_url = f"http://localhost:{PORT}"
+    else:
+        local_url = f"http://{HOST}:{PORT}"
+
     def _open():
         time.sleep(1.4)
-        webbrowser.open("http://localhost:5000")
+        webbrowser.open(local_url)
 
     threading.Thread(target=_open, daemon=True).start()
 
     print("\n🎵  MP3 Studio")
     print("━" * 42)
-    print("🌐  Open → http://localhost:5000")
+    print(f"🌐  Open → {local_url}")
     print("━" * 42)
+    if HOST not in _LOOPBACK_HOSTS:
+        print(f"⚠️   WARNING: listening on {HOST}:{PORT} (MP3STUDIO_HOST is set).")
+        print("    Other devices on your network can reach this app. It has NO")
+        print("    authentication — anyone who can connect can start downloads,")
+        print("    exports and open Save dialogs on this computer.")
+        print("    Unset MP3STUDIO_HOST to go back to local-only (127.0.0.1).")
+        print("━" * 42)
     print("✅  Request logs silenced (errors only)")
     print("Press Ctrl+C to stop.\n")
 
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    app.run(host=HOST, port=PORT, debug=False, threaded=True)
