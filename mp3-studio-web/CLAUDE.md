@@ -95,8 +95,9 @@ Normal web apps upload audio to a server, process it with FFmpeg, and send it ba
 This app skips the server entirely:
 
 1. User drops a file → browser holds it in memory (never sent anywhere)
-2. On the **first Preview or Export**, `loadFFmpeg()` downloads the FFmpeg core
-   (`@ffmpeg/core@0.12.6`, single-threaded UMD build, ~30 MB) from unpkg via `toBlobURL`
+2. On the **first Preview or Export**, `loadFFmpeg()` loads the FFmpeg core
+   (`@ffmpeg/core`, single-threaded UMD build, ~30 MB) **from the app's own origin** at
+   `/ffmpeg/<version>/ffmpeg-core.{js,wasm}` (see "Self-hosted core" below)
 3. `trimAndExport()` writes the file into FFmpeg's in-memory filesystem and runs **one**
    `ffmpeg.exec` built by the pure helper `buildExportArgs()`: the input is decoded once, each
    kept segment is cut with `atrim` + `asetpts`, a 12 ms `afade` out/in is applied at every
@@ -114,6 +115,29 @@ This app skips the server entirely:
    fades. Segment edges at 0 / the end are left open so the output runs to the true end of the
    stream.
 4. The result comes back as a `Blob`; the editor triggers a download via a temporary `<a download>`
+
+**Self-hosted core (no CDN):**
+- `@ffmpeg/core` is a dependency pinned to an **exact** version in `package.json` (no `^`/`~`;
+  currently `0.12.6`). Keep it a 0.12.x version compatible with `@ffmpeg/ffmpeg`.
+- `scripts/copy-ffmpeg-core.mjs` (plain Node, cross-platform) copies
+  `node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.{js,wasm}` into `public/ffmpeg/<version>/`. It runs
+  on `postinstall` (`npm install` / `npm ci`, incl. Vercel and CI) **and** on `prebuild` /
+  `predev` (`npm run build` / `npm run dev`), so the files exist even when install scripts are
+  skipped. It fails if the installed version differs from the `package.json` pin, and deletes
+  folders of older versions.
+- `public/ffmpeg/` is **gitignored** (the wasm is ~32 MB) and excluded from ESLint.
+- `next.config.ts` reads the pin from `package.json` and exposes it as
+  `NEXT_PUBLIC_FFMPEG_CORE_VERSION`; `loadFFmpeg()` builds the URL from it. It also sends
+  `Cache-Control: public, max-age=31536000, immutable` for `/ffmpeg/*` — safe because the version is
+  in the path, so upgrading `@ffmpeg/core` changes the URL.
+- `loadFFmpeg()` passes **plain same-origin URLs**, not `toBlobURL` blobs (that was only needed for
+  the cross-origin CDN). Verified in Chromium: the core loads and Preview/Export work. A real URL
+  lets the browser stream-compile the wasm and reuse its HTTP cache entry without a 30 MB Blob copy.
+- The FFmpeg worker loads the core with `importScripts()` (Turbopack bundles it as a classic
+  worker), which is why the **UMD** build is used. If a bundler change ever makes it a module
+  worker, `importScripts` fails and the library falls back to `import()`, which needs the ESM build.
+- The Playwright smoke test asserts that every `ffmpeg-core.*` request goes to the app's own origin.
+- **To upgrade:** `npm install --save-exact @ffmpeg/core@<version>`, then build and run the e2e test.
 
 **Why one filter graph (don't go back to per-segment files):** the old pipeline cut each kept
 segment with `-ss … -i` into `seg_N.mp3` and joined them with the concat demuxer + `-c copy`.
@@ -154,11 +178,23 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-They were added because multi-threaded FFmpeg.wasm needs `SharedArrayBuffer`. The app currently
-loads the **single-threaded** core, which may not strictly require them — but this has not been
-tested. **Do not remove them without testing Preview and Export in Chrome, Firefox and Safari
-on the deployed site.** Also note that `require-corp` blocks third-party resources (images,
-iframes, scripts) that don't send CORS/CORP headers — keep that in mind when embedding anything.
+They were added because multi-threaded FFmpeg.wasm needs `SharedArrayBuffer`. The app loads the
+**single-threaded** core, which does not use `SharedArrayBuffer`.
+
+**Tested 2026-11-15 (Chromium, production build, headers removed from `next.config.ts`, core
+self-hosted):** the page was *not* cross-origin isolated (`crossOriginIsolated === false`,
+`typeof SharedArrayBuffer === "undefined"`), and FFmpeg still worked:
+- built-in browser: 5 s tone with a 1.6 s cut → Preview produced a 3.37 s MP3, no errors;
+- Playwright smoke test (fresh profile, so the core was fetched over the network): upload → cut →
+  Export downloaded a valid MP3.
+
+So on Chromium the headers are **not needed** for the single-threaded core. Not yet tested:
+Firefox and Safari, and the deployed Vercel site. They are still set; whether to drop them is an
+open decision. Removing them would allow third-party embeds; keeping them is required only if the
+multi-threaded core (`@ffmpeg/core-mt`) is ever adopted. **Do not remove them without testing
+Preview and Export in Firefox and Safari as well.** While they are set, `require-corp` blocks
+third-party resources (images, iframes, scripts) that don't send CORS/CORP headers — keep that in
+mind when embedding anything. Same-origin files (like the self-hosted core) are unaffected.
 
 ---
 
@@ -411,8 +447,10 @@ Google indexes the landing page and blog. The editor is an app shell and is not 
 Same convention as the local app. Red = cut. Inversion happens at export time in `invertRegions()`.
 
 **5. No bundler customization**
-Plain Next.js with no webpack config. The FFmpeg core loads from unpkg at runtime, not from the
-app bundle.
+Plain Next.js with no webpack config. The FFmpeg core is not bundled: `scripts/copy-ffmpeg-core.mjs`
+copies it from `node_modules` into `public/ffmpeg/<version>/` (postinstall, prebuild, predev) and it is
+loaded at runtime from the app's own origin. No third-party CDN is involved, so a CDN outage can't
+break export, and the version lives in `package.json` instead of a string.
 
 ---
 

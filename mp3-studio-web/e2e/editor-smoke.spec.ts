@@ -12,6 +12,13 @@ test("upload → cut → export produces an MP3 download", async ({ page }) => {
     throw new Error(`Unexpected dialog: ${message}`);
   });
 
+  // The FFmpeg core must come from our own origin (public/ffmpeg/<version>/), never a CDN.
+  // context.on("request") also sees requests made by the FFmpeg web worker.
+  const coreRequests: string[] = [];
+  page.context().on("request", (req) => {
+    if (/ffmpeg-core\.(js|wasm)$/.test(new URL(req.url()).pathname)) coreRequests.push(req.url());
+  });
+
   await page.goto("/editor");
 
   // ── Upload via the real "Browse files" flow ───────────────────────────────
@@ -58,4 +65,8 @@ test("upload → cut → export produces an MP3 download", async ({ page }) => {
   expect(isId3 || isFrameSync).toBe(true);
 
   await expect(page.getByRole("button", { name: /Exported!/ })).toBeVisible();
+
+  const origin = new URL(page.url()).origin;
+  expect(coreRequests.length).toBeGreaterThan(0);
+  for (const url of coreRequests) expect(url.startsWith(`${origin}/ffmpeg/`)).toBe(true);
 });

@@ -4,8 +4,8 @@ const PORT = Number(process.env.E2E_PORT ?? 3000);
 
 /**
  * Smoke test for the editor. Runs against a production build (`next build && next start`)
- * because that is what Vercel serves. The first Export downloads the ~30 MB FFmpeg core
- * from unpkg, so timeouts are generous.
+ * because that is what Vercel serves. The first Export loads the ~30 MB FFmpeg core
+ * (served by the app itself from /ffmpeg/<version>/), so timeouts are generous.
  */
 export default defineConfig({
   testDir: "./e2e",
