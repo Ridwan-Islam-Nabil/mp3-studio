@@ -5,13 +5,6 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  // AudioEditor reads zoomMinRef.current during render (zoom badge). It is a known issue,
-  // kept as a warning (not an error) so CI can gate on lint until the wave-2 refactor of
-  // AudioEditor.tsx fixes it — then delete this override.
-  {
-    files: ["components/editor/AudioEditor.tsx"],
-    rules: { "react-hooks/refs": "warn" },
-  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

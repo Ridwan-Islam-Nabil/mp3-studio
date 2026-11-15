@@ -50,7 +50,30 @@ mp3-studio-web/
 │   ├── FeedbackWidget.tsx    ← "use client" — floating feedback button/modal → PostHog event
 │   └── editor/
 │       ├── EditorLoader.tsx  ← "use client" — next/dynamic import of AudioEditor, ssr: false
-│       └── AudioEditor.tsx   ← "use client" — the whole editor: state, WaveSurfer, preview, export
+│       ├── AudioEditor.tsx   ← "use client" — thin entry: file + object URL, upload analytics,
+│       │                        <ToastProvider>, <EditorShell>, DropZone or EditorSession
+│       ├── EditorSession.tsx ← one loaded file (keyed by its object URL): wires hooks → UI
+│       ├── hooks/
+│       │   ├── useWaveSurfer.ts     ← create/destroy WaveSurfer + plugins, playback events,
+│       │   │                           zoom calibration + slider, forwards region events
+│       │   ├── useRegionHistory.ts  ← regions state/ref, undo/redo/reset/remove, restore guard
+│       │   ├── usePlayback.ts       ← play/pause, skip, seek, speed, volume, mute
+│       │   └── useFFmpegJob.ts      ← preview/export runner, progress, failures → toast + analytics
+│       ├── ui/
+│       │   ├── EditorShell.tsx      ← background orbs, sticky top bar, content column
+│       │   ├── DropZone.tsx         ← empty-state drag-and-drop / browse
+│       │   ├── EditorToolbar.tsx    ← file name, "Save as", undo/redo/reset, change file
+│       │   ├── WaveformCard.tsx     ← header, minimap, timeline, waveform + hover cursor, fullscreen
+│       │   ├── ZoomBar.tsx          ← − / log slider / + / Fit / level badge
+│       │   ├── PlaybackBar.tsx      ← transport, seek, volume, speed (+ children at the end)
+│       │   ├── ActionButtons.tsx    ← Mark to Cut, Preview, Export (with progress fill)
+│       │   ├── RegionList.tsx       ← cut list (card, or `compact` inside fullscreen)
+│       │   └── PreviewModal.tsx     ← <audio> preview, rename, download (portal to <body>)
+│       ├── toast/ToastProvider.tsx  ← <ToastProvider> + useToast() (in-house, no dependency)
+│       ├── history.ts        ← pure undo/redo reducer (+ history.test.ts)
+│       ├── editorUtils.ts    ← pure helpers: fmt, zoom scale, file metadata (+ editorUtils.test.ts)
+│       ├── theme.ts          ← `C` palette, button/badge/card style helpers, sliderBg, cutColor
+│       └── types.ts          ← RegionData, Region, WsRegion
 ├── lib/
 │   ├── ffmpeg.ts             ← FFmpeg.wasm wrapper (loadFFmpeg, invertRegions, trimAndExport)
 │   ├── analytics.ts          ← PostHog init + typed track*() helpers
@@ -163,52 +186,83 @@ and pushes history. Regions can be dragged/resized (`region-updated`) and remove
 
 ---
 
-## Editor Features (AudioEditor.tsx)
+## Editor Features (components/editor/)
 
 - Drag-and-drop or browse upload
-- Waveform (460 px tall, purple→blue gradient), top timeline ruler, overview minimap
+- Waveform (360 px tall, purple→blue gradient), top timeline ruler, overview minimap
 - Hover cursor with time readout
 - Logarithmic zoom slider, calibrated per file (see below), up to 2000 px/sec
 - Play/pause, ±5 s skip, seek bar, volume + mute, playback speed
-- Undo / redo of region changes
+- Undo / redo / reset of region changes
 - Preview modal (HTML5 `<audio>` of the merged result) with download
 - Output filename input (used as the download name)
 - Fullscreen waveform (Esc exits)
+- Toast notifications (`toast/ToastProvider.tsx`): success after Export and after "Download MP3"
+  in the preview, errors when Preview/Export fail (out-of-memory gets the "try a shorter or
+  compressed file" wording). Auto-dismiss (5 s, errors 10 s), pause on hover/focus, close button;
+  errors are `role="alert"`, others `role="status"` inside an `aria-live="polite"` viewport.
+  **Never use `alert()`** in the editor — call `useToast()` instead.
 
 **Not implemented here (exists only in the local app):** keyboard shortcuts other than Esc,
 session auto-save to localStorage, region loop / mini-player, light theme, YouTube download.
 
+**Where new editor features go (wave 3):** keyboard shortcuts → one keydown effect in
+`EditorSession.tsx` (next to the Esc handler) calling the same callbacks the buttons use; session
+auto-save → an effect on `history.regions` in `EditorSession`; new FFmpeg actions (remove silence,
+normalize, split export, formats) → extend `useFFmpegJob` and reuse its `run()` /
+`reportFailure()`; new buttons → `ui/ActionButtons.tsx` (rendered as `PlaybackBar` children).
+
 ### Zoom calibration
-Same idea as the local app: after `ready`, the editor measures
-`container.offsetWidth / duration` (the natural fit-to-view px/sec) and stores
-`zoomMinRef.current` just above it. `sliderToZoom(s, zoomMin)` maps slider 0–100 onto a log curve
-from `zoomMin` to `ZOOM_MAX` (2000), so position 0 always produces a visible zoom.
+Same idea as the local app: after `ready`, `useWaveSurfer` measures
+`container.offsetWidth / duration` (the natural fit-to-view px/sec) and stores `zoomMin` **state**
+just above it (`calibrateZoomMin()` in `editorUtils.ts`). `sliderToZoom(s, zoomMin)` maps slider
+0–100 onto a log curve from `zoomMin` to `ZOOM_MAX` (2000), so position 0 always produces a visible
+zoom. One effect applies `ws.zoom()` whenever the slider, `zoomMin` or `duration` changes. `zoomMin`
+is state (not a ref) because the zoom badge renders it — reading a ref during render is a
+`react-hooks/refs` lint error.
 
 ### Styling
-The editor uses **inline styles** driven by a `C` color object at the top of the file (same palette
-as the local app: `#06060f` background, `#7c3aed` purple, `#06b6d4` cyan). The landing page and
-blog use Tailwind + `globals.css`.
+The editor uses **inline styles** driven by the `C` color object and the style helpers
+(`ghostBtn`, `primaryBtn`, `iconBtn`, `badge`, `card`, `textInput`, `sectionLabel`, `sliderBg`) in
+`components/editor/theme.ts` (same palette as the local app: `#06060f` background, `#7c3aed`
+purple, `#06b6d4` cyan). Use them in new editor components instead of new hex values. The landing
+page and blog use Tailwind + `globals.css`.
 
 ---
 
 ## State Architecture
 
-All editor state lives in `AudioEditor.tsx`. There is no global state manager.
+There is no global state manager. State is split by lifetime:
 
 ```
-file, fileUrl          → File object + its object URL (fed to WaveSurfer)
-duration, currentTime  → from WaveSurfer events
-outputName             → download filename (without .mp3)
-isPlaying, speed, volume, muted, zoomSlider, cursorTime, fullscreen
-regions[]              → { id, start, end, wsRef } — source of truth for export
-hist (useReducer)      → { history: RegionData[][], ptr } — undo/redo snapshots
-exporting / exportProgress / exportDone
-previewing / previewProgress / previewUrl / showPreview
-dragging               → drop-zone highlight
+AudioEditor                 source { file, url }  → the File and its object URL
+EditorSession (key = url)   outputName, zoomSlider, fullscreen
+  useRegionHistory          regions[] { id, start, end, wsRef } — source of truth for export
+                            hist (useReducer, history.ts) → { history: RegionData[][], ptr }
+  useWaveSurfer             duration, currentTime, isPlaying, zoomMin
+  usePlayback               speed, volume, muted
+  useFFmpegJob              exporting / exportProgress / exportDone,
+                            previewing / previewProgress / previewUrl / showPreview
+WaveformCard                cursorTime (hover readout)
+DropZone                    dragging (highlight)
+ToastProvider               toasts[]
 ```
 
-**Refs, not state:** `wsRef` (WaveSurfer), `wsRegionsRef` (Regions plugin), `regionsRef`
-(mirror of `regions` for use inside WaveSurfer callbacks), `zoomRef`, `zoomMinRef`.
+**New file = new session.** `AudioEditor` renders `<EditorSession key={url}>`, so choosing another
+file unmounts the old session (WaveSurfer destroyed, preview URL revoked) and mounts a fresh one —
+there is no manual "reset everything" list to keep in sync. Put new per-file state in
+`EditorSession` or its hooks, not in `AudioEditor`.
+
+**Refs, not state:** `wsRef` (WaveSurfer, from `useWaveSurfer`), `pluginRef` (Regions plugin,
+created in `EditorSession` and shared by `useWaveSurfer` + `useRegionHistory`), `regionsRef`
+(mirror of `regions` for code that runs inside WaveSurfer callbacks), the container refs
+(`waveRef`, `minimapRef`, `timelineRef`) and the hover cursor/badge refs in `WaveformCard`.
+Never read `.current` during render (lint error `react-hooks/refs`); if the UI needs a value, keep
+it in state.
+
+**WaveSurfer callbacks:** `useWaveSurfer` registers its listeners once per file inside an effect
+and forwards region events through React's `useEffectEvent`, so they always call the latest
+`onRegionCreated/Updated/DoubleClicked` from `useRegionHistory`.
 
 **Why history uses `useReducer`:** WaveSurfer event handlers are registered once inside a
 `useEffect`. A `useState` history pointer captured there goes stale, which caused undo/redo to read
@@ -226,7 +280,7 @@ new history entries.
 - Events: `file_uploaded`, `region_created`, `preview_opened`, `export_completed`,
   `export_failed`, `undo_used`, `redo_used`, `user_feedback`.
 - `export_failed` (`trackExportFailed`) fires from the catch blocks of `handleExport` /
-  `handlePreview` in `AudioEditor.tsx` with `{ stage: "load" | "export" | "preview", format,
+  `handlePreview` in `components/editor/hooks/useFFmpegJob.ts` (via `reportFailure`) with `{ stage: "load" | "export" | "preview", format,
   sizeMB, durationSec, cutCount, message }`. `stage` is `"load"` when the error is an
   `FFmpegLoadError`; `message` is truncated to 200 chars. Use it to see how often large files
   exhaust WebAssembly memory (filter on `format` / `sizeMB` / message text).
@@ -264,6 +318,12 @@ interactive piece into a small `"use client"` component.
 Only these files are `"use client"`: `AudioEditor.tsx`, `EditorLoader.tsx`, `FeedbackWidget.tsx`,
 `PostHogProvider.tsx`. Keep everything else a server component so pages stay indexable and light.
 
+The other files under `components/editor/` (hooks, `ui/`, `toast/`, `EditorSession.tsx`) use hooks
+and browser APIs but carry **no** `"use client"` directive: they are only ever imported from
+`AudioEditor.tsx`, which is the client boundary (and is itself only loaded client-side through
+`EditorLoader`). Don't import them from a server component; add the directive if one ever needs to
+be used elsewhere.
+
 The editor is loaded with `next/dynamic` and `ssr: false` (in `EditorLoader.tsx`) because
 WaveSurfer and FFmpeg need browser APIs, and loading them eagerly froze the browser on first load.
 `ssr: false` is only allowed inside a client component — that's why `EditorLoader` exists instead
@@ -293,7 +353,7 @@ npm install
 npm run dev        # http://localhost:3000
 npm run build      # run before pushing — Vercel fails the deploy on TypeScript errors
 npm run lint
-npm test           # Vitest unit tests (lib/*.test.ts)
+npm test           # Vitest unit tests (lib/ and components/**/*.test.ts)
 npm run test:e2e   # Playwright smoke test (builds + starts the app itself)
 npm run typecheck  # tsc for app code and for test files
 ```
@@ -303,8 +363,11 @@ The COOP/COEP headers from `next.config.ts` apply in development too.
 ### Tests
 
 - **Unit (Vitest)** — `lib/posts.test.ts` (slugs unique and URL-safe, required fields, valid
-  dates) and `lib/ffmpeg.test.ts` (`invertRegions`, mirroring the Python tests of the local app).
-  Config: `vitest.config.ts`. Known bugs are written as `it.fails(...)`: when you fix one, Vitest
+  dates), `lib/ffmpeg.test.ts` (`invertRegions`, mirroring the Python tests of the local app),
+  `components/editor/history.test.ts` (undo/redo reducer: push drops the redo branch, undo/redo
+  at the ends are no-ops, reset, clear, immutability) and `components/editor/editorUtils.test.ts`
+  (time format, zoom scale, file metadata). Vitest runs in Node, so keep `history.ts` /
+  `editorUtils.ts` free of React and DOM. Config: `vitest.config.ts`. Known bugs are written as `it.fails(...)`: when you fix one, Vitest
   reports that test as failing — change it to `it(...)`.
 - **E2E smoke (Playwright)** — `e2e/editor-smoke.spec.ts`: opens `/editor`, uploads
   `e2e/fixtures/tone-5s.mp3`, drags a cut on the waveform, clicks Export and checks that an `.mp3`
@@ -313,8 +376,12 @@ The COOP/COEP headers from `next.config.ts` apply in development too.
   It needs internet: the FFmpeg core comes from unpkg. First time: `npx playwright install chromium`.
 - Test files are excluded from `tsconfig.json` so `next build` never type-checks them;
   `tsconfig.test.json` covers them instead (`npm run typecheck`).
-- The waveform wrapper in `AudioEditor.tsx` carries `data-testid="waveform"` — keep it when
-  refactoring, the smoke test drags on it.
+- The waveform wrapper in `ui/WaveformCard.tsx` carries `data-testid="waveform"` — keep it when
+  refactoring, the smoke test drags on it. Other editor test ids: `drop-zone`, `editor-toolbar`,
+  `waveform-card`, `playback-bar`, `region-list`, `region-list-compact`, `preview-modal`,
+  `toast-viewport`, `toast-success` / `toast-error` / `toast-info`.
+- WaveSurfer's drag helper swallows any click within 10 ms after a drag ends. Automated tests that
+  click a button immediately after dragging on the waveform must wait a moment first.
 - CI (`.github/workflows/ci.yml` at the repo root) runs lint, build, test type-check, Vitest and
   Playwright on every push and pull request.
 
@@ -354,22 +421,33 @@ app bundle.
 1. **Removing the COOP/COEP headers** without testing — see the section above.
 
 2. **Using WaveSurfer or FFmpeg outside the client editor** — both touch `window`/DOM. They must
-   stay inside `AudioEditor.tsx` (loaded with `ssr: false`) and be initialized in `useEffect` or
-   event handlers.
+   stay inside `components/editor/` (reached only through `AudioEditor.tsx`, loaded with
+   `ssr: false`) and be initialized in `useEffect` or event handlers.
 
 3. **Guarding `loadFFmpeg()` yourself** — it's idempotent (`if (loaded) return`), so just call it
-   before each FFmpeg run, as `runFFmpeg()` does.
+   before each FFmpeg run, as `run()` in `hooks/useFFmpegJob.ts` does.
 
 4. **Forgetting `URL.revokeObjectURL()`** — every `createObjectURL()` must be revoked. See
-   `handleFile()` (file + preview URLs) and `handleExport()` for the pattern.
+   `handleFile()` in `AudioEditor.tsx` (file URL), `useFFmpegJob` (preview URL on replace and on
+   unmount; export URL right after the download starts).
 
 5. **Adding event handlers to server components** (`app/page.tsx`, blog pages) — breaks the build.
 
-6. **Reading `regions` state inside WaveSurfer callbacks** — use `regionsRef.current`; the state
-   value captured when the callback was registered is stale.
+6. **Reading `regions` state inside WaveSurfer callbacks** — use `regionsRef.current` (in
+   `useRegionHistory`); the state value captured when the callback was registered is stale.
 
 7. **Pushing history without the restore guard** — re-creating regions during undo/redo fires
-   `region-created`; the restore flag must stay set while `restoreSnapshot()` runs.
+   `region-created`; `isRestoringRef` must stay set while `restoreSnapshot()` runs, and every
+   region handler must check it. Change regions only through `commit()` in `useRegionHistory`
+   (never inside a `setRegions` updater — StrictMode runs updaters twice → double history entries).
 
 8. **Pushing without `npm run build`** — TypeScript errors that `next dev` tolerates fail the
    Vercel build.
+
+9. **Reading a ref's `.current` during render** — `react-hooks/refs` is an error (the old
+   per-file override is gone). Keep render-visible values in state (see `zoomMin`).
+
+10. **Putting per-file state in `AudioEditor`** — it outlives a file change. Per-file state belongs
+    in `EditorSession` or its hooks, which remount for every new file.
+
+11. **Using `alert()`** — use `useToast()` from `toast/ToastProvider.tsx`.
