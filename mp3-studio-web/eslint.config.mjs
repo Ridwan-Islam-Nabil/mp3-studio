@@ -19,6 +19,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Self-hosted FFmpeg core, copied from node_modules (scripts/copy-ffmpeg-core.mjs)
+    "public/ffmpeg/**",
   ]),
 ]);
 

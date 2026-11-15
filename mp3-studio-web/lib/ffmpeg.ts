@@ -31,7 +31,7 @@
  */
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { fetchFile } from "@ffmpeg/util";
 
 // Singleton — only one FFmpeg instance per page
 let ffmpeg: FFmpeg | null = null;
@@ -72,14 +72,20 @@ export async function loadFFmpeg(onProgress?: ProgressCallback): Promise<void> {
 
   const instance = new FFmpeg();
 
-  // The wasm files are loaded from @ffmpeg CDN (unpkg).
-  // These are large (~30MB) — load is slow on first visit but cached by browser.
-  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+  // The core (~30MB wasm) is served from our own origin: scripts/copy-ffmpeg-core.mjs
+  // copies it from node_modules/@ffmpeg/core into public/ffmpeg/<version>/, and
+  // next.config.ts injects the version and serves that path with an immutable cache.
+  // Plain URLs, no toBlobURL: same-origin files need no blob workaround, and a real
+  // URL lets the browser stream-compile the wasm and reuse its HTTP cache entry
+  // instead of copying 30MB into a Blob first.
+  const version = process.env.NEXT_PUBLIC_FFMPEG_CORE_VERSION;
 
   try {
+    if (!version) throw new Error("NEXT_PUBLIC_FFMPEG_CORE_VERSION is not set (see next.config.ts)");
+    const baseURL = `${window.location.origin}/ffmpeg/${version}`;
     await instance.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+      coreURL: `${baseURL}/ffmpeg-core.js`,
+      wasmURL: `${baseURL}/ffmpeg-core.wasm`,
     });
   } catch (e) {
     try { instance.terminate(); } catch { /* never started */ }
