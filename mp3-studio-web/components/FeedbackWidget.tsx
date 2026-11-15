@@ -110,7 +110,7 @@ export default function FeedbackWidget() {
                 </div>
 
                 {/* Thumbs */}
-                <p style={{ fontSize: 12, color: C.muted, margin: "0 0 10px", fontWeight: 600 }}>How's your experience?</p>
+                <p style={{ fontSize: 12, color: C.muted, margin: "0 0 10px", fontWeight: 600 }}>How&apos;s your experience?</p>
                 <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
                   {(["positive", "negative"] as const).map((s) => (
                     <button
@@ -131,7 +131,7 @@ export default function FeedbackWidget() {
                 </div>
 
                 {/* Message */}
-                <p style={{ fontSize: 12, color: C.muted, margin: "0 0 6px", fontWeight: 600 }}>What's on your mind? <span style={{ color: C.dim, fontWeight: 400 }}>(optional)</span></p>
+                <p style={{ fontSize: 12, color: C.muted, margin: "0 0 6px", fontWeight: 600 }}>What&apos;s on your mind? <span style={{ color: C.dim, fontWeight: 400 }}>(optional)</span></p>
                 <textarea
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}

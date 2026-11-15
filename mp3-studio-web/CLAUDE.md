@@ -247,12 +247,33 @@ Set them in Vercel project settings. `.env*` files are gitignored.
 
 ```bash
 npm install
-npm run dev     # http://localhost:3000
-npm run build   # run before pushing — Vercel fails the deploy on TypeScript errors
+npm run dev        # http://localhost:3000
+npm run build      # run before pushing — Vercel fails the deploy on TypeScript errors
 npm run lint
+npm test           # Vitest unit tests (lib/*.test.ts)
+npm run test:e2e   # Playwright smoke test (builds + starts the app itself)
+npm run typecheck  # tsc for app code and for test files
 ```
 
 The COOP/COEP headers from `next.config.ts` apply in development too.
+
+### Tests
+
+- **Unit (Vitest)** — `lib/posts.test.ts` (slugs unique and URL-safe, required fields, valid
+  dates) and `lib/ffmpeg.test.ts` (`invertRegions`, mirroring the Python tests of the local app).
+  Config: `vitest.config.ts`. Known bugs are written as `it.fails(...)`: when you fix one, Vitest
+  reports that test as failing — change it to `it(...)`.
+- **E2E smoke (Playwright)** — `e2e/editor-smoke.spec.ts`: opens `/editor`, uploads
+  `e2e/fixtures/tone-5s.mp3`, drags a cut on the waveform, clicks Export and checks that an `.mp3`
+  downloads. `playwright.config.ts` runs `npm run build && npm run start` itself (or reuses a server
+  already on port 3000 outside CI — stop `npm run dev` first if you want to test a fresh build).
+  It needs internet: the FFmpeg core comes from unpkg. First time: `npx playwright install chromium`.
+- Test files are excluded from `tsconfig.json` so `next build` never type-checks them;
+  `tsconfig.test.json` covers them instead (`npm run typecheck`).
+- The waveform wrapper in `AudioEditor.tsx` carries `data-testid="waveform"` — keep it when
+  refactoring, the smoke test drags on it.
+- CI (`.github/workflows/ci.yml` at the repo root) runs lint, build, test type-check, Vitest and
+  Playwright on every push and pull request.
 
 ---
 

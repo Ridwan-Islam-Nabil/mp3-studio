@@ -38,3 +38,6 @@ desktop.ini
 
 # Logs
 *.log
+
+# Committed test fixture (small generated tone used by the web app's Playwright smoke test)
+!mp3-studio-web/e2e/fixtures/*.mp3

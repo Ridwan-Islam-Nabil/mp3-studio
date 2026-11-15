@@ -667,6 +667,7 @@ export default function AudioEditor() {
                 {/* Waveform + hover cursor overlay */}
                 <div
                   ref={waveWrapRef}
+                  data-testid="waveform"
                   style={{ position: "relative", borderRadius: "0 0 8px 8px", overflow: "hidden", background: C.surface, cursor: "crosshair" }}
                   onMouseMove={(e) => {
                     if (!wsRef.current || !duration) return;

@@ -52,6 +52,26 @@ local-only.
 
 ---
 
+## Testing
+
+CI (`.github/workflows/ci.yml`) runs on every push and pull request, with one job per app.
+
+```
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
+
+- `tests/test_invert_regions.py` covers `_invert_regions()` (no cuts, unsorted, overlapping and
+  nested cuts, cuts at 0 / the end / past the end, tiny gaps, rounding).
+- `tests/conftest.py` loads functions from `app.py` with `ast` instead of `import app`, because
+  importing `app.py` empties `temp_audio/` (`_purge_temp_dir()`), which would delete the track
+  open in a running app. Use `load_app_functions(...)` for new tests of pure helpers.
+- Known bugs are marked `@pytest.mark.xfail(strict=True)`; once fixed, the test turns into a
+  failure (XPASS) — remove the marker.
+- Web app tests (Vitest + Playwright): see "Local Development" in `mp3-studio-web/CLAUDE.md`.
+
+---
+
 ## File Structure
 
 ```

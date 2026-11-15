@@ -87,7 +87,7 @@ export interface KeepSegment {
  * Example: audio is 60s, cuts are [10-20, 40-50]
  *          → keep [0-10, 20-40, 50-60]
  */
-function invertRegions(cuts: CutRegion[], duration: number): KeepSegment[] {
+export function invertRegions(cuts: CutRegion[], duration: number): KeepSegment[] {
   if (cuts.length === 0) {
     return [{ start: 0, end: duration }];
   }
