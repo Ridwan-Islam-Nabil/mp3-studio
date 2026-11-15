@@ -201,10 +201,36 @@ Inter-module communication without imports uses custom DOM events:
 | **Python** | Auto-installed by `run.bat` via winget or silent installer |
 | **FFmpeg** | Auto-installed by `run.bat` via winget |
 | **Flask** | Auto-installed by `run.bat` via pip |
-| **yt-dlp** | Auto-installed by `run.bat` via pip |
-| **flask-cors** | Auto-installed by `run.bat` via pip |
+| **yt-dlp** | Auto-installed by `run.bat` via pip, and updated on every launch |
 
 Everything is handled by `run.bat` on first launch. No manual steps required.
+
+yt-dlp is upgraded each time you start the app, because YouTube changes often break older
+versions. If you're offline, the update is skipped and the app starts with the version you have.
+
+---
+
+## 🔒 Network Access
+
+By default MP3 Studio only listens on `127.0.0.1`, so it is reachable from **this computer only**.
+
+To use it from another device on your network (phone, tablet, another PC), set `MP3STUDIO_HOST`
+before launching:
+
+```bash
+# macOS / Linux
+MP3STUDIO_HOST=0.0.0.0 bash run.sh
+```
+
+```bat
+:: Windows (Command Prompt)
+set MP3STUDIO_HOST=0.0.0.0
+run.bat
+```
+
+Then open `http://<this-computer's-IP>:5000` on the other device. The app has **no password** —
+anyone on the same network can use it while this is on, so only do this on a network you trust.
+Note that Save dialogs still open on the computer running the app.
 
 ---
 

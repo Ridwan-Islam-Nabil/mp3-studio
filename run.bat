@@ -179,13 +179,25 @@ timeout /t 4 >nul
 :: ------------------------------------------------------------
 
 echo  [..] Checking Python packages...
-"%PYTHON_CMD%" -m pip install -r requirements.txt -q --upgrade
+:: Installs anything missing. Needs no network when everything is already
+:: installed, so the app still starts offline.
+"%PYTHON_CMD%" -m pip install -r requirements.txt -q --disable-pip-version-check
 if errorlevel 1 (
     echo  [ERROR] Failed to install packages. Check internet and try again.
     pause
     exit /b 1
 )
 echo  [OK] All packages ready
+
+:: Keep yt-dlp current - YouTube changes often break older versions.
+:: Best effort: short timeout, no retries, never stops the launch when offline.
+echo  [..] Updating yt-dlp...
+"%PYTHON_CMD%" -m pip install -U yt-dlp -q --disable-pip-version-check --timeout 5 --retries 0 >nul 2>&1
+if errorlevel 1 (
+    echo  [!] Could not update yt-dlp - continuing with the installed version.
+) else (
+    echo  [OK] yt-dlp update check done ^(skipped if offline^)
+)
 
 
 :: ------------------------------------------------------------

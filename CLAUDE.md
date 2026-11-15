@@ -22,6 +22,10 @@ app only.** Read `mp3-studio-web/CLAUDE.md` before touching anything in that fol
 
 A **local web application** for downloading YouTube audio or uploading local audio files, converting to MP3, and trimming them with a visual waveform editor. Works with any audio.
 
+> **Status: maintenance mode.** The hosted web app in `mp3-studio-web/` is the main product. This
+> local app is the **"YouTube + offline" edition**: keep it working (security fixes, yt-dlp updates,
+> bug fixes), but **new editor features go to `mp3-studio-web/`**, not here.
+
 The app runs on the user's own machine via `run.bat` (Windows) or `run.sh` (Mac/Linux). There is no cloud backend — everything runs locally via Flask on `localhost:5000`.
 
 **Tech stack:**
@@ -43,10 +47,18 @@ bash run.sh
 
 Server starts at `http://localhost:5000`. Static files are never cached (`SEND_FILE_MAX_AGE_DEFAULT = 0`).
 
-**Network exposure:** `app.run()` binds `host="0.0.0.0"`, so the app is also reachable from other
-devices on the same network, not just `localhost`. There is no authentication, and endpoints start
-yt-dlp/FFmpeg jobs and open native dialogs. Change it to `127.0.0.1` if the app should be truly
-local-only.
+**Network exposure:** the server binds to `127.0.0.1` (this machine only) by default. To reach it
+from other devices on the LAN, set `MP3STUDIO_HOST=0.0.0.0` before launching (e.g.
+`MP3STUDIO_HOST=0.0.0.0 bash run.sh`, or `set MP3STUDIO_HOST=0.0.0.0` then `run.bat`); the
+terminal prints a warning whenever the bind address is not loopback. There is no authentication,
+and endpoints start yt-dlp/FFmpeg jobs and open native dialogs on the host, so only opt in on a
+trusted network. The browser auto-opens `http://localhost:5000` in both modes. There is no CORS
+(the frontend is same-origin); a `before_request` guard (`_block_cross_site`) rejects non-GET
+requests whose `Origin` doesn't match the host, and in loopback mode also rejects non-loopback
+`Host` headers (DNS rebinding).
+
+**yt-dlp updates:** `run.bat` / `run.sh` run `pip install -U yt-dlp` on every launch (quiet, 5 s
+timeout, no retries). If it fails (offline), the launch continues with the installed version.
 
 **Every time you change a JS or CSS file, bump the `?v=N` cache-buster** on the script tag in `templates/index.html`. Current version: `?v=19`.
 

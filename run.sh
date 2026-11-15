@@ -20,9 +20,19 @@ if ! command -v ffmpeg &>/dev/null; then
   echo ""
 fi
 
-# Install dependencies
+# Install dependencies (anything missing). Needs no network when everything is
+# already installed, so the app still starts offline.
 echo " Installing dependencies..."
-pip3 install -r requirements.txt -q --upgrade
+python3 -m pip install -r requirements.txt -q --disable-pip-version-check
+
+# Keep yt-dlp current — YouTube changes often break older versions.
+# Best effort: short timeout, no retries, never stops the launch when offline.
+echo " Updating yt-dlp..."
+if python3 -m pip install -U yt-dlp -q --disable-pip-version-check --timeout 5 --retries 0 >/dev/null 2>&1; then
+  echo " yt-dlp update check done (skipped if offline)."
+else
+  echo " [WARNING] Could not update yt-dlp — continuing with the installed version."
+fi
 
 echo ""
 echo " Starting server → http://localhost:5000"
