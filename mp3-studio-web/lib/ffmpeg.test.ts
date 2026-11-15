@@ -36,7 +36,7 @@ describe("invertRegions", () => {
   // BUG: the loop does `cursor = cut.end` instead of `cursor = Math.max(cursor, cut.end)`,
   // so a short cut inside a longer one moves the cursor backwards and part of the longer
   // cut (20–30 here) ends up in the export. app.py merges overlaps first and is correct.
-  it.fails("BUG: a cut contained in another cut must not re-open a keep segment", () => {
+  it("a cut contained in another cut does not re-open a keep segment", () => {
     expect(invertRegions(cuts([10, 30], [15, 20]), 60)).toEqual(keeps([0, 10], [30, 60]));
   });
 
@@ -71,7 +71,7 @@ describe("invertRegions", () => {
   // BUG (same as app.py): a cut that starts after the end of the audio yields a keep
   // segment ending past `duration`. Harmless with FFmpeg in practice (-to past EOF stops at
   // EOF) and WaveSurfer keeps regions inside the audio.
-  it.fails("BUG: a cut entirely beyond the duration is ignored", () => {
+  it("ignores a cut entirely beyond the duration", () => {
     expect(invertRegions(cuts([70, 80]), 60)).toEqual(keeps([0, 60]));
   });
 

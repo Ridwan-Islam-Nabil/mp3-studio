@@ -464,7 +464,11 @@ def _invert_regions(cut_regions: list[dict], duration: float) -> list[dict]:
     sorted_cuts = sorted(cut_regions, key=lambda r: float(r["start"]))
     merged: list[tuple[float, float]] = []
     for r in sorted_cuts:
-        s, e = float(r["start"]), float(r["end"])
+        # Clamp to the audio; a cut entirely outside it is ignored
+        s = max(0.0, float(r["start"]))
+        e = min(float(duration), float(r["end"]))
+        if e <= s:
+            continue
         if merged and s <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], e))
         else:

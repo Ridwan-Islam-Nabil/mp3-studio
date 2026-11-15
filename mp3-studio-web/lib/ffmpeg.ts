@@ -141,8 +141,11 @@ export function invertRegions(cuts: CutRegion[], duration: number): KeepSegment[
     return [{ start: 0, end: duration }];
   }
 
-  // Sort cuts by start time
-  const sorted = [...cuts].sort((a, b) => a.start - b.start);
+  // Clamp cuts to the audio, drop empty ones, sort by start time
+  const sorted = cuts
+    .map((c) => ({ start: Math.max(0, c.start), end: Math.min(duration, c.end) }))
+    .filter((c) => c.end > c.start)
+    .sort((a, b) => a.start - b.start);
   const keep: KeepSegment[] = [];
   let cursor = 0;
 
@@ -150,7 +153,8 @@ export function invertRegions(cuts: CutRegion[], duration: number): KeepSegment[
     if (cut.start > cursor + 0.01) {
       keep.push({ start: cursor, end: cut.start });
     }
-    cursor = cut.end;
+    // max(): a cut nested inside an earlier one must not move the cursor back
+    cursor = Math.max(cursor, cut.end);
   }
 
   if (cursor < duration - 0.01) {

@@ -68,12 +68,6 @@ def test_cut_starting_before_zero(invert_regions):
     assert invert_regions(cuts((-5, 10)), 60) == keeps((10, 60))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: a cut that starts after the end of the audio produces a keep segment whose "
-    "end is past `duration` (keep [0, 70] for a 60 s file). Harmless with FFmpeg in "
-    "practice (-to past EOF just stops at EOF) and the UI keeps regions inside the audio.",
-)
 def test_cut_entirely_beyond_duration_is_ignored(invert_regions):
     assert invert_regions(cuts((70, 80)), 60) == keeps((0, 60))
 
