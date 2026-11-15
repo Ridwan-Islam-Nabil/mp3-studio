@@ -25,10 +25,13 @@ import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.js";
 import MinimapPlugin from "wavesurfer.js/dist/plugins/minimap.js";
-import { loadFFmpeg, trimAndExport, type CutRegion } from "@/lib/ffmpeg";
+import {
+  loadFFmpeg, trimAndExport, FFmpegLoadError, isLikelyOutOfMemory, type CutRegion,
+} from "@/lib/ffmpeg";
 import {
   trackFileUploaded,
   trackExportCompleted,
+  trackExportFailed,
   trackPreviewOpened,
   trackRegionCreated,
   trackUndo,
@@ -440,6 +443,27 @@ export default function AudioEditor() {
     return trimAndExport(file, cuts, duration, (p) => onProg(20 + Math.round(p * 0.8)));
   };
 
+  /** Records a failed Preview/Export and tells the user (alert for now). */
+  const reportFFmpegFailure = (kind: "export" | "preview", e: unknown) => {
+    const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    trackExportFailed({
+      stage: e instanceof FFmpegLoadError ? "load" : kind,
+      format: file?.name.split(".").pop()?.toLowerCase() ?? "unknown",
+      sizeMB: file ? Math.round((file.size / 1024 / 1024) * 10) / 10 : 0,
+      durationSec: Math.round(duration),
+      cutCount: regions.length,
+      message,
+    });
+    const title = kind === "export" ? "Export failed." : "Preview failed.";
+    if (isLikelyOutOfMemory(e)) {
+      alert(`${title}\nYour browser ran out of memory processing this file. ` +
+        "Try a shorter clip, or convert it to a compressed format (e.g. MP3) first — " +
+        "long WAV/FLAC files are the most likely to hit this limit.");
+    } else {
+      alert(`${title}\n${message}`);
+    }
+  };
+
   // ─── Preview ─────────────────────────────────────────────────────────────
 
   const handlePreview = async () => {
@@ -451,7 +475,7 @@ export default function AudioEditor() {
       setPreviewUrl(URL.createObjectURL(blob));
       setShowPreview(true);
       trackPreviewOpened({ cutCount: regions.length });
-    } catch (e) { alert("Preview failed.\n" + String(e)); }
+    } catch (e) { reportFFmpegFailure("preview", e); }
     finally { setPreviewing(false); }
   };
 
@@ -488,7 +512,7 @@ export default function AudioEditor() {
         durationSec: Math.round(duration),
         outputDurationSec: Math.round(duration - cutDur),
       });
-    } catch (e) { alert("Export failed.\n" + String(e)); }
+    } catch (e) { reportFFmpegFailure("export", e); }
     finally { setExporting(false); }
   };
 
