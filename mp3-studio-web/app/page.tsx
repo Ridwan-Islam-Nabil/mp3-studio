@@ -2,11 +2,17 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import Image from "next/image";
 import FeedbackWidget from "@/components/FeedbackWidget";
+import SiteFooter from "@/components/site/SiteFooter";
+import SiteNav from "@/components/site/SiteNav";
+import ToolsGrid from "@/components/site/ToolsGrid";
+import { jsonLdString, pageMetadata } from "@/lib/seo";
+import { SITE_NAME, SITE_URL } from "@/lib/site";
 
 const jsonLd = {
   "@context": "https://schema.org",
   "@type": "WebApplication",
-  name: "MP3 Studio",
+  name: SITE_NAME,
+  url: SITE_URL,
   description: "Free online MP3 trimmer with multiple cuts — remove multiple sections from audio in one pass. No upload, no software, no sign-up. Works with MP3, WAV, FLAC, M4A.",
   applicationCategory: "MultimediaApplication",
   operatingSystem: "Web",
@@ -60,11 +66,11 @@ const faqLd = {
   ],
 };
 
-export const metadata: Metadata = {
-  alternates: { canonical: "https://mp3-studio.vercel.app" },
+export const metadata: Metadata = pageMetadata({
   title: "Online MP3 Trimmer — Multiple Cuts, No Upload, Free",
   description: "Remove multiple sections from any MP3, WAV, or FLAC file online — free, no upload, no software. Mark every part to delete, preview the result, and export one clean file. No sign-up. Works in your browser.",
-};
+  path: "/",
+});
 
 const features = [
   { icon: "✂️", title: "Multiple cuts, one export", desc: "Mark every section to remove — ad breaks, mistakes, silence — and export once. No re-uploading between cuts. Most online trimmers limit you to one trim. We don't." },
@@ -105,28 +111,14 @@ const faqs = [
 export default function LandingPage() {
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdString(jsonLd) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdString(faqLd) }} />
       <FeedbackWidget />
 
       <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
 
         {/* ── Navbar ── */}
-        <nav style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "16px clamp(16px, 5vw, 64px)",
-          borderBottom: "1px solid var(--card-border)",
-          background: "rgba(6,6,15,0.85)", backdropFilter: "blur(12px)",
-          position: "sticky", top: 0, zIndex: 100,
-        }}>
-          <span style={{ fontWeight: 800, fontSize: 18 }}>
-            <span className="gradient-text">MP3</span>{" "}
-            <span style={{ color: "var(--text)" }}>Studio</span>
-          </span>
-          <Link href="/editor" className="btn btn-primary" style={{ fontSize: 13 }}>
-            Open Editor →
-          </Link>
-        </nav>
+        <SiteNav />
 
         {/* ── Hero ── */}
         <section style={{
@@ -220,6 +212,17 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
+        </section>
+
+        {/* ── Tools ── */}
+        <section id="tools" style={{ padding: "0 clamp(16px, 5vw, 64px) 80px", maxWidth: 1100, margin: "0 auto", scrollMarginTop: 80 }}>
+          <h2 style={{ textAlign: "center", fontSize: "clamp(24px, 4vw, 36px)", fontWeight: 800, marginBottom: 12 }}>
+            More free audio tools
+          </h2>
+          <p style={{ textAlign: "center", color: "var(--text-muted)", marginBottom: 40, fontSize: 15 }}>
+            Same editor, same privacy: every tool runs in your browser and nothing is uploaded.
+          </p>
+          <ToolsGrid />
         </section>
 
         {/* ── Screenshot 2: Zoom ── */}
@@ -356,18 +359,7 @@ export default function LandingPage() {
         </section>
 
         {/* ── Footer ── */}
-        <footer style={{
-          borderTop: "1px solid var(--card-border)",
-          padding: "24px clamp(16px, 5vw, 64px)",
-          textAlign: "center", color: "var(--text-dim)", fontSize: 13,
-        }}>
-          MP3 Studio — Free online MP3 trimmer with multiple cuts. No upload. No software. No sign-up. No size limit.
-          <br />
-          <span style={{ marginTop: 6, display: "inline-block" }}>
-            © {new Date().getFullYear()} RIN Production. All rights reserved. &nbsp;·&nbsp;{" "}
-            <Link href="/blog" style={{ color: "var(--text-dim)", textDecoration: "underline" }}>Blog</Link>
-          </span>
-        </footer>
+        <SiteFooter />
       </div>
     </>
   );

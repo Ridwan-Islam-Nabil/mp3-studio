@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import PostHogProvider from "@/components/PostHogProvider";
+import { SITE_NAME, SITE_URL } from "@/lib/site";
+import { OG_IMAGE } from "@/lib/seo";
 
 // Downloaded and self-hosted by next/font at build time: no request to Google from the
 // browser, no layout shift (size-adjusted fallback). Same weights the old <link> loaded.
@@ -12,6 +14,10 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  // Resolves every relative metadata URL (OG images, canonicals). Canonicals are set per page
+  // (lib/seo.ts → pageMetadata), never here, so no page inherits the home page's canonical.
+  metadataBase: new URL(SITE_URL),
+  applicationName: SITE_NAME,
   title: "Online MP3 Trimmer — Multiple Cuts, No Upload, Free",
   description:
     "Remove multiple sections from any MP3, WAV, or FLAC file online — free, no upload, no software. Mark every part to delete, preview the result, and export one clean file. No sign-up.",
@@ -47,11 +53,15 @@ export const metadata: Metadata = {
       "Remove multiple sections from your MP3, WAV, or FLAC file online — free, no upload, no software. Mark every part to delete and export one clean file.",
     type: "website",
     locale: "en_US",
+    url: SITE_URL,
+    siteName: SITE_NAME,
+    images: [OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
     title: "Online MP3 Trimmer — Multiple Cuts, No Upload, Free",
     description: "Remove multiple sections from your audio online — free, no upload, no software, no sign-up.",
+    images: [OG_IMAGE],
   },
   robots: {
     index: true,

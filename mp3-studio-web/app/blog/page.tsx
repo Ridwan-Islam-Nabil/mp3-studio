@@ -1,12 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import SiteFooter from "@/components/site/SiteFooter";
 import { posts } from "@/lib/posts";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: "Blog – MP3 Studio",
   description:
     "Guides and tips for editing audio online — trimming MP3s, removing podcast ads, precision waveform editing, and more.",
-};
+  path: "/blog",
+});
 
 export default function BlogPage() {
   const sorted = [...posts].sort(
@@ -14,6 +17,7 @@ export default function BlogPage() {
   );
 
   return (
+    <>
     <main
       style={{
         minHeight: "100vh",
@@ -97,5 +101,7 @@ export default function BlogPage() {
         ))}
       </div>
     </main>
+    <SiteFooter />
+    </>
   );
 }

@@ -1,3 +1,5 @@
+import { SITE_HOST } from "./site";
+
 export interface Post {
   slug: string;
   title: string;
@@ -21,7 +23,7 @@ export const posts: Post[] = [
       "delete several parts of audio online",
     ],
     content: `
-<p>You've got an MP3. Maybe it's a podcast with three ad breaks you want to remove. Maybe it's a lecture with dead air scattered throughout. Maybe it's a song with an intro and outro you don't need.</p>
+<p>You've got an MP3. Maybe it's a podcast with three ad breaks you want to remove. Maybe it's a lecture with dead air scattered throughout (there's a <a href="/cut-lecture-recording">guide for lecture recordings</a> too). Maybe it's a song with an intro and outro you don't need.</p>
 
 <p>You search for a free online MP3 trimmer — and you find tools that let you drag two handles. One start point. One end point. One cut.</p>
 
@@ -29,12 +31,12 @@ export const posts: Post[] = [
 
 <h2>There's a better way</h2>
 
-<p><a href="https://mp3-studio.vercel.app">MP3 Studio</a> lets you mark as many cut regions as you want in a single session. Drag over any part of the waveform to mark it for removal, mark another section, then another — and export once with everything removed simultaneously.</p>
+<p><a href="/">MP3 Studio</a> lets you mark as many cut regions as you want in a single session. Drag over any part of the waveform to mark it for removal, mark another section, then another — and export once with everything removed simultaneously.</p>
 
 <p>Here's how it works:</p>
 
 <ol>
-  <li>Go to <a href="https://mp3-studio.vercel.app">mp3-studio.vercel.app</a></li>
+  <li>Go to <a href="/">${SITE_HOST}</a></li>
   <li>Upload your MP3, WAV, FLAC, or M4A file (or drag and drop it)</li>
   <li>Click and drag on the waveform to mark a section you want to remove — it turns red</li>
   <li>Repeat for every section you want to cut</li>
@@ -44,7 +46,7 @@ export const posts: Post[] = [
 
 <h2>Why no upload?</h2>
 
-<p>Every step runs in your browser using WebAssembly. Your audio file never leaves your device. No server receives it. This matters especially if you're editing private recordings, confidential interviews, or personal voice memos.</p>
+<p>Every step runs in your browser using WebAssembly. Your audio file never leaves your device. No server receives it. This matters especially if you're editing private recordings, confidential interviews, or personal voice memos (see <a href="/trim-voice-note">how to trim a voice note</a>).</p>
 
 <h2>What about precision?</h2>
 
@@ -54,7 +56,7 @@ export const posts: Post[] = [
 
 <p>If you need to remove multiple sections from an MP3 in one pass — free, without uploading your file to a server — MP3 Studio is the tool. No sign-up, no file size limit, no watermarks.</p>
 
-<p><a href="https://mp3-studio.vercel.app">Try it now →</a></p>
+<p><a href="/">Try it now →</a></p>
     `.trim(),
   },
   {
@@ -76,7 +78,7 @@ export const posts: Post[] = [
 
 <h2>MP3 Studio — Best for multi-cut + precision trimming</h2>
 
-<p><a href="https://mp3-studio.vercel.app">MP3 Studio</a> is built specifically for one workflow: load an audio file, mark the parts you want to remove, preview, export. It supports multiple cut regions (not just one), has a 2000× zoom waveform so you can trim to the millisecond, and runs entirely in your browser — your file never leaves your device.</p>
+<p><a href="/">MP3 Studio</a> is built specifically for one workflow: load an audio file, mark the parts you want to remove, preview, export. It supports multiple cut regions (not just one), has a 2000× zoom waveform so you can trim to the millisecond, and runs entirely in your browser — your file never leaves your device.</p>
 
 <p><strong>Best for:</strong> Removing multiple sections (ads, silence, mistakes) from a single file with precision.</p>
 
@@ -90,7 +92,7 @@ export const posts: Post[] = [
 
 <p>It depends what you're trying to do:</p>
 <ul>
-  <li><strong>Remove multiple sections from one file</strong> → <a href="https://mp3-studio.vercel.app">MP3 Studio</a></li>
+  <li><strong>Remove multiple sections from one file</strong> → <a href="/">MP3 Studio</a></li>
   <li><strong>Apply effects, EQ, or denoise</strong> → AudioEditor.org</li>
   <li><strong>Quick single trim or format conversion</strong> → Bear Audio Tool</li>
   <li><strong>Full multi-track production</strong> → Install Audacity (still the best for that)</li>
@@ -119,7 +121,7 @@ export const posts: Post[] = [
 <h2>Step-by-step: Remove podcast ads with MP3 Studio</h2>
 
 <ol>
-  <li><strong>Open <a href="https://mp3-studio.vercel.app">MP3 Studio</a></strong> — no sign-up needed</li>
+  <li><strong>Open <a href="/">MP3 Studio</a></strong> — no sign-up needed</li>
   <li><strong>Upload your podcast MP3</strong> — drag and drop or click to browse. Files stay on your device.</li>
   <li><strong>Listen and find the ad breaks</strong> — use the playback controls to navigate. The waveform usually shows ad breaks as sections with different amplitude patterns.</li>
   <li><strong>Zoom in and mark each ad</strong> — drag on the waveform to select the ad section. It turns red. Repeat for each ad break.</li>
@@ -135,9 +137,9 @@ export const posts: Post[] = [
 
 <h2>Does this affect audio quality?</h2>
 
-<p>No. MP3 Studio uses FFmpeg under the hood and re-encodes only the segments needed. The cuts are clean with no audible artifacts at the edit points.</p>
+<p>No. MP3 Studio uses FFmpeg under the hood and re-encodes only the segments needed. The cuts are clean with no audible artifacts at the edit points. If the episode is too quiet or too loud overall, you can <a href="/normalize-audio-volume-online">normalize its volume</a> in the same export.</p>
 
-<p><a href="https://mp3-studio.vercel.app">Try MP3 Studio free →</a></p>
+<p><a href="/">Try MP3 Studio free →</a></p>
     `.trim(),
   },
   {
@@ -161,12 +163,12 @@ export const posts: Post[] = [
 
 <p>Precision editing requires zoom. A waveform that shows a 3-minute file at full width gives you very little resolution per pixel. Most online tools let you zoom to 128× — enough to see individual seconds, but not milliseconds.</p>
 
-<p><a href="https://mp3-studio.vercel.app">MP3 Studio</a> goes to <strong>2000× zoom</strong>. At that level, you can see the exact shape of each sound wave and position your cut region with sub-millisecond accuracy.</p>
+<p><a href="/">MP3 Studio</a> goes to <strong>2000× zoom</strong>. At that level, you can see the exact shape of each sound wave and position your cut region with sub-millisecond accuracy.</p>
 
 <h2>How to make a precision cut</h2>
 
 <ol>
-  <li>Upload your audio at <a href="https://mp3-studio.vercel.app">mp3-studio.vercel.app</a></li>
+  <li>Upload your audio at <a href="/">${SITE_HOST}</a></li>
   <li>Use the playback controls to find the rough area of your cut</li>
   <li>Drag the zoom slider to the right to zoom in — the waveform expands</li>
   <li>Keep zooming until you can see the exact waveform shape around your cut point</li>
@@ -183,7 +185,7 @@ export const posts: Post[] = [
 
 <p>Everything runs in your browser. Your audio never leaves your device. No sign-up, no watermark, no file size limit.</p>
 
-<p><a href="https://mp3-studio.vercel.app">Try MP3 Studio free →</a></p>
+<p><a href="/">Try MP3 Studio free →</a></p>
     `.trim(),
   },
   {
@@ -206,11 +208,11 @@ export const posts: Post[] = [
 
 <h2>How to remove a middle section online</h2>
 
-<p><a href="https://mp3-studio.vercel.app">MP3 Studio</a> works differently. Instead of selecting what to keep, you select what to delete. Drag on the waveform to mark a region — it turns red — then click Export. Everything outside the red region is kept and joined seamlessly.</p>
+<p><a href="/">MP3 Studio</a> works differently. Instead of selecting what to keep, you select what to delete. Drag on the waveform to mark a region — it turns red — then click Export. Everything outside the red region is kept and joined seamlessly.</p>
 
 <p>Step by step:</p>
 <ol>
-  <li>Go to <a href="https://mp3-studio.vercel.app">mp3-studio.vercel.app</a></li>
+  <li>Go to <a href="/">${SITE_HOST}</a></li>
   <li>Drop your MP3, WAV, FLAC, or M4A file onto the page</li>
   <li>Use the playback controls to find the section in the middle you want to remove</li>
   <li>Drag on the waveform to select that section — it highlights in red</li>
@@ -231,7 +233,7 @@ export const posts: Post[] = [
 
 <p>Everything runs in your browser. Your file is never uploaded to any server. No sign-up, no file size limit, no watermark.</p>
 
-<p><a href="https://mp3-studio.vercel.app">Try it free →</a></p>
+<p><a href="/">Try it free →</a></p>
     `.trim(),
   },
   {
@@ -265,7 +267,7 @@ export const posts: Post[] = [
 
 <h2>The best free audio trimmer with no upload and no software</h2>
 
-<p><a href="https://mp3-studio.vercel.app">MP3 Studio</a> checks every box:</p>
+<p><a href="/">MP3 Studio</a> checks every box:</p>
 
 <ul>
   <li><strong>No upload</strong> — runs entirely in your browser using WebAssembly. Your file never reaches any server.</li>
@@ -278,13 +280,13 @@ export const posts: Post[] = [
 
 <h2>Supported formats</h2>
 
-<p>MP3 Studio accepts MP3, WAV, FLAC, M4A, AAC, OGG, and OPUS. All export to MP3.</p>
+<p>MP3 Studio accepts MP3, WAV, FLAC, M4A, AAC, OGG, and OPUS, and exports MP3, WAV or M4A (see <a href="/convert-audio-to-wav-mp3-m4a">converting between formats</a>).</p>
 
 <h2>Works best on desktop</h2>
 
 <p>For best performance, use Chrome or Edge on a desktop or laptop. The WebAssembly audio processing is more stable on desktop browsers, especially for large files.</p>
 
-<p><a href="https://mp3-studio.vercel.app">Try it free — no upload, no software, no sign-up →</a></p>
+<p><a href="/">Try it free — no upload, no software, no sign-up →</a></p>
     `.trim(),
   },
   {
@@ -312,10 +314,10 @@ export const posts: Post[] = [
 
 <p>Instead of selecting what to keep (like most trimmers do), you select what to delete. Each selection turns red on the waveform. When you're ready, you click Export — and all marked sections are removed in a single pass, leaving one clean joined file.</p>
 
-<p><a href="https://mp3-studio.vercel.app">MP3 Studio</a> works exactly this way. Here's the workflow:</p>
+<p><a href="/">MP3 Studio</a> works exactly this way. Here's the workflow:</p>
 
 <ol>
-  <li>Open <a href="https://mp3-studio.vercel.app">mp3-studio.vercel.app</a></li>
+  <li>Open <a href="/">${SITE_HOST}</a></li>
   <li>Drop your audio file (MP3, WAV, FLAC, M4A, OGG all work)</li>
   <li>Drag on the waveform to mark the first section to remove — it turns red</li>
   <li>Find the next section and drag to mark it — another red region appears</li>
@@ -336,12 +338,12 @@ export const posts: Post[] = [
 
 <ul>
   <li>Removing multiple ad breaks from a podcast episode</li>
-  <li>Deleting several dead-air gaps from a long recording</li>
+  <li>Deleting several dead-air gaps from a long recording (or let the <a href="/remove-silence-from-audio">remove silence</a> tool find them)</li>
   <li>Cutting out mistakes from an interview or voice recording</li>
   <li>Removing an intro, an outro, and a mid-roll section in one pass</li>
 </ul>
 
-<p><a href="https://mp3-studio.vercel.app">Try the multiple cut audio trimmer free →</a></p>
+<p><a href="/">Try the multiple cut audio trimmer free →</a></p>
     `.trim(),
   },
 ];
