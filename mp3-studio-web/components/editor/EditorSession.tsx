@@ -1,31 +1,37 @@
 /**
  * The editor for one loaded file. AudioEditor renders it with `key={fileUrl}`, so choosing
- * another file remounts it: WaveSurfer, regions, history, playback settings, zoom, preview and
- * export state all start fresh without a manual reset list.
+ * another file remounts it: WaveSurfer, regions, history, playback settings, zoom, preview,
+ * region play/loop and export state all start fresh without a manual reset list.
  *
- * This component only wires hooks to presentational components. Wave-3 features hook in here:
- *   - keyboard shortcuts → one keydown effect next to the Esc handler, calling the same
- *     callbacks the buttons use (playback.togglePlay, history.undo/redo, markToCut, …)
- *   - session auto-save → an effect on `history.regions` (+ restore after `duration` > 0)
- *   - new FFmpeg actions → extend useFFmpegJob (reuse run()/reportFailure())
+ * This component only wires hooks to presentational components:
+ *   - useKeyboardShortcuts → `onShortcut` below, calling the same callbacks the buttons use
+ *   - useSessionAutosave   → restores/saves this file's cuts in localStorage
+ *   - useRegionPlayback    → ▶ / ⟲ per region row, `L`
+ *   - new FFmpeg actions   → extend useFFmpegJob (reuse run()/reportFailure()), buttons in
+ *                            ui/ActionButtons.tsx
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import { baseName } from "./editorUtils";
 import { useFFmpegJob } from "./hooks/useFFmpegJob";
-import { usePlayback } from "./hooks/usePlayback";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { SKIP_SECONDS, usePlayback } from "./hooks/usePlayback";
 import { useRegionHistory } from "./hooks/useRegionHistory";
+import { useRegionPlayback } from "./hooks/useRegionPlayback";
+import { useSessionAutosave } from "./hooks/useSessionAutosave";
 import { useWaveSurfer } from "./hooks/useWaveSurfer";
+import type { ShortcutAction } from "./shortcuts";
 import { cutColor } from "./theme";
 import { ExportButton, MarkToCutButton, PreviewButton } from "./ui/ActionButtons";
 import { EditorToolbar } from "./ui/EditorToolbar";
 import { PlaybackBar } from "./ui/PlaybackBar";
 import { PreviewModal } from "./ui/PreviewModal";
 import { RegionList } from "./ui/RegionList";
+import { ShortcutsOverlay } from "./ui/ShortcutsOverlay";
 import { WaveformCard } from "./ui/WaveformCard";
 
-/** Length of the region "Mark to Cut" drops, centered on the playhead. */
+/** Length of the region "Mark to Cut" (and `N`) drops, centered on the playhead. */
 const MARK_SECONDS = 10;
 
 interface Props {
@@ -38,6 +44,7 @@ export default function EditorSession({ file, fileUrl, onReplaceFile }: Props) {
   const [outputName, setOutputName] = useState(() => baseName(file.name));
   const [zoomSlider, setZoomSlider] = useState(0); // 0–100 log slider position
   const [fullscreen, setFullscreen] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   const pluginRef = useRef<RegionsPlugin | null>(null);
   const history = useRegionHistory(pluginRef);
@@ -50,14 +57,15 @@ export default function EditorSession({ file, fileUrl, onReplaceFile }: Props) {
     onRegionDoubleClicked: history.onRegionDoubleClicked,
   });
   const playback = usePlayback(wave.wsRef);
+  const regionPlay = useRegionPlayback(wave.wsRef, history.regionsRef);
   const job = useFFmpegJob({ file, duration: wave.duration, regions: history.regions, outputName });
-
-  // Esc exits fullscreen
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFullscreen(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  useSessionAutosave({
+    file,
+    duration: wave.duration,
+    regions: history.regions,
+    loadRegions: history.loadRegions,
+    clearRegions: history.reset,
+  });
 
   /** Drops a cut centered on the playhead; the region-created handler records it. */
   const markToCut = () => {
@@ -69,6 +77,48 @@ export default function EditorSession({ file, fileUrl, onReplaceFile }: Props) {
       color: cutColor(), drag: true, resize: true,
     });
   };
+
+  /** Keyboard shortcuts (mapping in shortcuts.ts). Returns true when the key was used. */
+  const onShortcut = (action: ShortcutAction): boolean => {
+    // Esc closes the topmost thing: shortcuts overlay → preview modal → fullscreen.
+    if (action === "escape") {
+      if (showShortcuts) setShowShortcuts(false);
+      else if (job.showPreview) job.closePreview();
+      else if (fullscreen) setFullscreen(false);
+      else return false;
+      return true;
+    }
+    if (job.showPreview) return false; // the preview modal keeps its own keys (audio controls)
+    if (action === "showShortcuts") { setShowShortcuts((s) => !s); return true; }
+    if (showShortcuts || wave.duration === 0) return false;
+
+    switch (action) {
+      case "togglePlay":       playback.togglePlay(); break;
+      case "markCut":          markToCut(); break;
+      case "preview":          void job.handlePreview(); break;
+      case "toggleFullscreen": setFullscreen((f) => !f); break;
+      case "undo":             history.undo(); break;
+      case "redo":             history.redo(); break;
+      case "skipBack":         playback.skip(-SKIP_SECONDS); break;
+      case "skipForward":      playback.skip(SKIP_SECONDS); break;
+      case "stopLoop":         regionPlay.stopLoop(); break;
+    }
+    return true;
+  };
+  useKeyboardShortcuts(onShortcut);
+
+  const regionList = (compact: boolean) => (
+    <RegionList
+      compact={compact}
+      regions={history.regions}
+      duration={wave.duration}
+      onRemove={history.removeRegion}
+      onChangeTimes={history.updateRegionTimes}
+      activeRegion={regionPlay.active}
+      onPlay={regionPlay.playRegion}
+      onLoop={regionPlay.loopRegion}
+    />
+  );
 
   return (
     <>
@@ -82,6 +132,7 @@ export default function EditorSession({ file, fileUrl, onReplaceFile }: Props) {
           onDownload={job.downloadPreview}
         />
       )}
+      {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
 
       <EditorToolbar
         fileName={file.name}
@@ -104,10 +155,11 @@ export default function EditorSession({ file, fileUrl, onReplaceFile }: Props) {
         currentTime={wave.currentTime}
         fullscreen={fullscreen}
         onToggleFullscreen={() => setFullscreen((f) => !f)}
+        onShowShortcuts={() => setShowShortcuts(true)}
         zoomSlider={zoomSlider}
         onZoomChange={setZoomSlider}
         zoomMin={wave.zoomMin}
-        fullscreenPanel={<RegionList compact regions={history.regions} onRemove={history.removeRegion} />}
+        fullscreenPanel={regionList(true)}
       />
 
       <PlaybackBar playback={playback} isPlaying={wave.isPlaying} currentTime={wave.currentTime} duration={wave.duration}>
@@ -118,7 +170,7 @@ export default function EditorSession({ file, fileUrl, onReplaceFile }: Props) {
           running={job.exporting} progress={job.exportProgress} done={job.exportDone} />
       </PlaybackBar>
 
-      <RegionList regions={history.regions} onRemove={history.removeRegion} />
+      {regionList(false)}
     </>
   );
 }

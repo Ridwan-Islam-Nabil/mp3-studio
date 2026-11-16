@@ -4,7 +4,7 @@ import { C, ghostBtn, primaryBtn } from "../theme";
 
 export function MarkToCutButton({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
   return (
-    <button onClick={onClick} disabled={disabled}
+    <button onClick={onClick} disabled={disabled} title="Drop a 10 s cut centered on the playhead (N)"
       style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.4)", color: C.cutText, borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
       ✂ Mark to Cut
     </button>
@@ -20,7 +20,7 @@ interface PreviewProps { onClick: () => void; disabled: boolean; running: boolea
 
 export function PreviewButton({ onClick, disabled, running, progress }: PreviewProps) {
   return (
-    <button onClick={onClick} disabled={disabled}
+    <button onClick={onClick} disabled={disabled} title="Preview the result (P)"
       style={ghostBtn({ minWidth: 110, justifyContent: "center", position: "relative", overflow: "hidden" })}>
       {running && <ProgressFill pct={progress} color="rgba(124,58,237,0.2)" />}
       <span style={{ position: "relative" }}>{running ? `Building… ${progress}%` : "▶ Preview"}</span>

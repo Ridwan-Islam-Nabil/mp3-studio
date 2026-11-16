@@ -1,5 +1,5 @@
 /**
- * Waveform card: header (label · cursor/playhead times · fullscreen toggle), minimap,
+ * Waveform card: header (label · cursor/playhead times · shortcuts + fullscreen buttons), minimap,
  * timeline, the WaveSurfer waveform with a hover cursor, hint text, zoom bar, and —
  * in fullscreen — whatever `fullscreenPanel` the parent passes (the compact region list).
  *
@@ -21,6 +21,7 @@ interface Props {
   currentTime: number;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
+  onShowShortcuts: () => void;
   zoomSlider: number;
   onZoomChange: (updater: (s: number) => number) => void;
   zoomMin: number;
@@ -28,11 +29,12 @@ interface Props {
 }
 
 const timeLabel: React.CSSProperties = { fontSize: 9, fontWeight: 700, color: C.dim, textTransform: "uppercase", letterSpacing: "0.09em" };
-const timeValue: React.CSSProperties = { fontFamily: "monospace", fontSize: 13, fontWeight: 600, letterSpacing: "0.02em" };
+const headerBtn: React.CSSProperties = { background: "none", border: `1px solid ${C.border}`, color: C.dim, borderRadius: 7, width: 30, height: 30, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, transition: "all .15s" };
+const timeValue: React.CSSProperties ={ fontFamily: "monospace", fontSize: 13, fontWeight: 600, letterSpacing: "0.02em" };
 
 export function WaveformCard({
   wsRef, waveRef, minimapRef, timelineRef, duration, currentTime,
-  fullscreen, onToggleFullscreen, zoomSlider, onZoomChange, zoomMin, fullscreenPanel,
+  fullscreen, onToggleFullscreen, onShowShortcuts, zoomSlider, onZoomChange, zoomMin, fullscreenPanel,
 }: Props) {
   const [cursorTime, setCursorTime] = useState<number | null>(null);
   const wrapRef   = useRef<HTMLDivElement>(null);
@@ -87,12 +89,20 @@ export function WaveformCard({
           </div>
         </div>
 
-        <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+        <div style={{ flex: 1, display: "flex", justifyContent: "flex-end", gap: 6 }}>
+          <button
+            onClick={onShowShortcuts}
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+            style={headerBtn}
+          >
+            ⌨
+          </button>
           <button
             onClick={onToggleFullscreen}
-            title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen waveform"}
+            title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen waveform (F)"}
             aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen waveform"}
-            style={{ background: "none", border: `1px solid ${C.border}`, color: C.dim, borderRadius: 7, width: 30, height: 30, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, transition: "all .15s" }}
+            style={headerBtn}
           >
             {fullscreen ? "⊠" : "⛶"}
           </button>

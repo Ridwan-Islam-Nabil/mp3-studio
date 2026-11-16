@@ -6,7 +6,7 @@
  * context — and above the feedback button — like it did before the editor was split up.
  */
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { C, ghostBtn, primaryBtn, textInput } from "../theme";
 
@@ -28,6 +28,19 @@ export function PreviewModal({ url, cutCount, outputName, onOutputNameChange, on
       audioRef.current.currentTime = 0;
     }
   };
+  // Move focus into the modal (Space then plays/pauses the preview instead of "clicking" the
+  // editor button that had focus behind it) and give it back on close. Closing from outside
+  // (Esc in EditorSession) must also stop the preview.
+  useEffect(() => {
+    const audio = audioRef.current;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    audio?.focus();
+    return () => {
+      audio?.pause();
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
+
   const close    = () => { stopAudio(); onClose(); };
   const download = () => { stopAudio(); onDownload(); };
 

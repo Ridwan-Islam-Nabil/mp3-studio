@@ -58,7 +58,10 @@ mp3-studio-web/
 │       │   │                           zoom calibration + slider, forwards region events
 │       │   ├── useRegionHistory.ts  ← regions state/ref, undo/redo/reset/remove, restore guard
 │       │   ├── usePlayback.ts       ← play/pause, skip, seek, speed, volume, mute
-│       │   └── useFFmpegJob.ts      ← preview/export runner, progress, failures → toast + analytics
+│       │   ├── useFFmpegJob.ts      ← preview/export runner, progress, failures → toast + analytics
+│       │   ├── useRegionPlayback.ts ← ▶ play / ⟲ loop one region on the same WaveSurfer, `L`
+│       │   ├── useKeyboardShortcuts.ts ← one window keydown listener → shortcutFor() → handler
+│       │   └── useSessionAutosave.ts   ← restore/save this file's cuts in localStorage
 │       ├── ui/
 │       │   ├── EditorShell.tsx      ← background orbs, sticky top bar, content column
 │       │   ├── DropZone.tsx         ← empty-state drag-and-drop / browse
@@ -67,11 +70,17 @@ mp3-studio-web/
 │       │   ├── ZoomBar.tsx          ← − / log slider / + / Fit / level badge
 │       │   ├── PlaybackBar.tsx      ← transport, seek, volume, speed (+ children at the end)
 │       │   ├── ActionButtons.tsx    ← Mark to Cut, Preview, Export (with progress fill)
-│       │   ├── RegionList.tsx       ← cut list (card, or `compact` inside fullscreen)
+│       │   ├── RegionList.tsx       ← cut list (card, or `compact` inside fullscreen): ▶/⟲ per row,
+│       │   │                           click-to-type times, Delete on a focused row
+│       │   ├── ShortcutsOverlay.tsx ← "Keyboard shortcuts" dialog (`?` or ⌨ button; portal to <body>)
 │       │   └── PreviewModal.tsx     ← <audio> preview, rename, download (portal to <body>)
-│       ├── toast/ToastProvider.tsx  ← <ToastProvider> + useToast() (in-house, no dependency)
+│       ├── toast/ToastProvider.tsx  ← <ToastProvider> + useToast() (in-house, no dependency),
+│       │                               optional action button per toast
 │       ├── history.ts        ← pure undo/redo reducer (+ history.test.ts)
-│       ├── editorUtils.ts    ← pure helpers: fmt, zoom scale, file metadata (+ editorUtils.test.ts)
+│       ├── editorUtils.ts    ← pure helpers: fmt, zoom scale, file metadata, typed-time parse/
+│       │                        format/validate (+ editorUtils.test.ts)
+│       ├── shortcuts.ts      ← pure key → action mapping + overlay rows (+ shortcuts.test.ts)
+│       ├── session.ts        ← pure localStorage session helpers (+ session.test.ts)
 │       ├── theme.ts          ← `C` palette, button/badge/card style helpers, sliderBg, cutColor
 │       └── types.ts          ← RegionData, Region, WsRegion
 ├── lib/
@@ -215,10 +224,12 @@ available as soon as audio loads.
 
 Ways to create a cut:
 - Drag on the waveform (`enableDragSelection`)
-- **Mark to Cut** button — drops a 10 s region centered on the playhead
+- **Mark to Cut** button or `N` — drops a 10 s region centered on the playhead
 
 All region creation goes through WaveSurfer's `region-created` event, which updates React state
-and pushes history. Regions can be dragged/resized (`region-updated`) and removed from the list.
+and pushes history. Regions can be dragged/resized (`region-updated`), get typed-in start/end
+times (`updateRegionTimes` — `setOptions()` doesn't emit `region-updated`, so it commits itself)
+and be removed from the list.
 
 ---
 
@@ -232,21 +243,86 @@ and pushes history. Regions can be dragged/resized (`region-updated`) and remove
 - Undo / redo / reset of region changes
 - Preview modal (HTML5 `<audio>` of the merged result) with download
 - Output filename input (used as the download name)
-- Fullscreen waveform (Esc exits)
+- Fullscreen waveform (`F` toggles, Esc exits)
+- Keyboard shortcuts (see the table below) + a "Keyboard shortcuts" overlay (`?` or the ⌨ button
+  in the waveform header)
+- Typed-in region times: click a start/end time in the cut list → text input accepting
+  `SS.mmm`, `M:SS.mmm` or `H:MM:SS.mmm` (`parseTime()`); Enter or blur applies, Esc cancels.
+  `resolveTimeEdit()` clamps to [0, duration] and requires start < end (≥ 10 ms); an invalid
+  value keeps the field open with a red border on Enter and is dropped on blur. One edit = one
+  history entry.
+- Play / loop one cut: ▶ per row plays just that region (pauses at its end, playhead left there),
+  ⟲ loops it until clicked again or `L`. See "Region play / loop" below.
+- Session auto-save of the cuts per file (see "Auto-save" below)
 - Toast notifications (`toast/ToastProvider.tsx`): success after Export and after "Download MP3"
   in the preview, errors when Preview/Export fail (out-of-memory gets the "try a shorter or
-  compressed file" wording). Auto-dismiss (5 s, errors 10 s), pause on hover/focus, close button;
-  errors are `role="alert"`, others `role="status"` inside an `aria-live="polite"` viewport.
+  compressed file" wording), info when a session is restored. Auto-dismiss (5 s, errors 10 s),
+  pause on hover/focus, close button, optional `action` button (`{ label, onClick }` in the
+  options; clicking runs it and dismisses); errors are `role="alert"`, others `role="status"`
+  inside an `aria-live="polite"` viewport.
   **Never use `alert()`** in the editor — call `useToast()` instead.
 
-**Not implemented here (exists only in the local app):** keyboard shortcuts other than Esc,
-session auto-save to localStorage, region loop / mini-player, light theme, YouTube download.
+**Not implemented here (exists only in the local app):** light theme, YouTube download, the
+right-click region context menu.
 
-**Where new editor features go (wave 3):** keyboard shortcuts → one keydown effect in
-`EditorSession.tsx` (next to the Esc handler) calling the same callbacks the buttons use; session
-auto-save → an effect on `history.regions` in `EditorSession`; new FFmpeg actions (remove silence,
-normalize, split export, formats) → extend `useFFmpegJob` and reuse its `run()` /
-`reportFailure()`; new buttons → `ui/ActionButtons.tsx` (rendered as `PlaybackBar` children).
+**Where new editor features go:** new shortcuts → a new `ShortcutAction` + key in
+`shortcuts.ts` (`shortcutFor` + `SHORTCUT_LIST`, with a test) and a `case` in `onShortcut` in
+`EditorSession.tsx`, calling the same callback the button uses; new FFmpeg actions (remove
+silence, normalize, split export, formats) → extend `useFFmpegJob` and reuse its `run()` /
+`reportFailure()`; new buttons → `ui/ActionButtons.tsx` (rendered as `PlaybackBar` children);
+per-region actions → a button in the `RegionList` row next to ▶/⟲.
+
+### Keyboard Shortcuts
+
+Mapping in `shortcuts.ts` (pure, unit-tested), listener in `hooks/useKeyboardShortcuts.ts`,
+actions in `onShortcut` in `EditorSession.tsx`. Same keys as the local app.
+
+| Key | Action |
+|---|---|
+| `Space` | Play / pause |
+| `N` | Drop a 10 s cut centered on the playhead (same as Mark to Cut) |
+| `P` | Preview |
+| `F` | Toggle fullscreen waveform |
+| `L` | Stop a looping region |
+| `←` / `→` | Skip 5 s |
+| `Ctrl/⌘+Z` | Undo |
+| `Ctrl/⌘+Y`, `Ctrl/⌘+Shift+Z` | Redo |
+| `Delete` / `Backspace` | Remove the focused row in the cut list (handled by the row) |
+| `?` | Open / close the shortcuts overlay |
+| `Esc` | Close the overlay → else the preview modal → else exit fullscreen |
+
+Rules (keep them when adding keys): nothing fires while focus is in a text input, textarea,
+select or contenteditable (except Esc; a field that handles Esc itself calls `preventDefault` /
+`stopPropagation`, like the region time editor); arrows are left to a focused range slider;
+letters and arrows never fire with Ctrl/⌘/Alt, so browser shortcuts (Ctrl+P, Ctrl+F, Alt+←, …)
+are untouched; one-shot keys ignore key repeat. `preventDefault` is called only for keys that
+were used, so Space doesn't scroll the page or "click" the focused button. While the overlay is
+open only `?`/Esc work; while the preview modal is open only Esc does (Space etc. go to its
+`<audio>` controls). Before the audio has decoded, shortcuts other than `?`/Esc do nothing.
+
+### Region play / loop
+`useRegionPlayback` uses the editor's WaveSurfer instance (no second `<audio>`, unlike the local
+app's mini-player): `setTime(start)` + `play()`, and one `timeupdate` listener that reads the
+region's **live** bounds from `regionsRef` (`region.wsRef.start/end`), so dragging or typing new
+times while it plays takes effect immediately. At the end it pauses (▶) or jumps back to the start
+(⟲; a region that ends at the end of the file restarts from the `pause`/`finish` event). The mode
+ends when playback pauses for any reason, when the user seeks outside the region (a jump > 0.75 s
+to outside it; playback continues from there), when the region disappears (removed/undone →
+pause), or when a new file loads (the session remounts). Only one region plays at a time;
+clicking ▶ on a looping region switches it to a single play, ⟲ on a playing one starts looping.
+
+### Auto-save
+`useSessionAutosave` + `session.ts`. Cuts are stored in `localStorage` under
+`mp3studio-web:session:<FNV-1a hash of name|size|lastModified>` as
+`{ v: 1, cuts: [{ start, end }], savedAt }` on every region change; no cuts → the entry is
+removed. Only the 20 most recently saved files are kept (`MAX_SESSIONS`; on a quota error it
+prunes to 10 and retries once). Every storage call is in try/catch (private mode, blocked
+storage, quota) — failures just mean nothing is remembered.
+Restore runs once after `duration > 0`: cuts are clamped to the duration, re-created with
+`loadRegions()` — which makes them the history **baseline** (`{ type: "load" }`, no entry, Undo
+stays disabled) — and an info toast "Restored N cuts from your last session" offers **Clear**
+(an undoable reset, so Ctrl+Z brings them back). Saving is enabled only after that check, so a
+freshly mounted (empty) session never overwrites stored cuts. Nothing leaves the browser.
 
 ### Zoom calibration
 Same idea as the local app: after `ready`, `useWaveSurfer` measures
@@ -272,11 +348,13 @@ There is no global state manager. State is split by lifetime:
 
 ```
 AudioEditor                 source { file, url }  → the File and its object URL
-EditorSession (key = url)   outputName, zoomSlider, fullscreen
+EditorSession (key = url)   outputName, zoomSlider, fullscreen, showShortcuts
   useRegionHistory          regions[] { id, start, end, wsRef } — source of truth for export
                             hist (useReducer, history.ts) → { history: RegionData[][], ptr }
   useWaveSurfer             duration, currentTime, isPlaying, zoomMin
   usePlayback               speed, volume, muted
+  useRegionPlayback         active { id, loop } | null (+ activeRef for the timeupdate listener)
+  useSessionAutosave        (no state — a ref that gates saving until the restore check ran)
   useFFmpegJob              exporting / exportProgress / exportDone,
                             previewing / previewProgress / previewUrl / showPreview
 WaveformCard                cursorTime (hover readout)
@@ -304,7 +382,9 @@ and forwards region events through React's `useEffectEvent`, so they always call
 `useEffect`. A `useState` history pointer captured there goes stale, which caused undo/redo to read
 `history[undefined]`. The reducer always sees current state. A restore flag suppresses the
 `region-created` handler while `restoreSnapshot()` re-creates regions, so undo/redo doesn't push
-new history entries.
+new history entries. `restoreSnapshot()` passes each snapshot's `id` to `addRegion()`, so a
+re-created region keeps its id — before wave 3 it got a new random one, and dragging or
+double-clicking a region after an undo no longer matched its entry in `regions`.
 
 ---
 
@@ -401,21 +481,34 @@ The COOP/COEP headers from `next.config.ts` apply in development too.
 - **Unit (Vitest)** — `lib/posts.test.ts` (slugs unique and URL-safe, required fields, valid
   dates), `lib/ffmpeg.test.ts` (`invertRegions`, mirroring the Python tests of the local app),
   `components/editor/history.test.ts` (undo/redo reducer: push drops the redo branch, undo/redo
-  at the ends are no-ops, reset, clear, immutability) and `components/editor/editorUtils.test.ts`
-  (time format, zoom scale, file metadata). Vitest runs in Node, so keep `history.ts` /
-  `editorUtils.ts` free of React and DOM. Config: `vitest.config.ts`. Known bugs are written as `it.fails(...)`: when you fix one, Vitest
+  at the ends are no-ops, reset, clear, load, immutability), `components/editor/editorUtils.test.ts`
+  (time format, zoom scale, file metadata, typed-time parse/format/validate),
+  `components/editor/shortcuts.test.ts` (key mapping, text-field/slider/modifier rules) and
+  `components/editor/session.test.ts` (key, save/load, clamping, pruning to 20, quota, throwing
+  storage — with an in-memory fake). Vitest runs in Node, so keep `history.ts`, `editorUtils.ts`,
+  `shortcuts.ts` and `session.ts` free of React and DOM globals. Config: `vitest.config.ts`. Known bugs are written as `it.fails(...)`: when you fix one, Vitest
   reports that test as failing — change it to `it(...)`.
 - **E2E smoke (Playwright)** — `e2e/editor-smoke.spec.ts`: opens `/editor`, uploads
   `e2e/fixtures/tone-5s.mp3`, drags a cut on the waveform, clicks Export and checks that an `.mp3`
   downloads. `playwright.config.ts` runs `npm run build && npm run start` itself (or reuses a server
   already on port 3000 outside CI — stop `npm run dev` first if you want to test a fresh build).
   It needs internet: the FFmpeg core comes from unpkg. First time: `npx playwright install chromium`.
+- **E2E features (Playwright)** — `e2e/editor-features.spec.ts`: `N` creates a cut, Ctrl+Z / Ctrl+Y,
+  shortcuts ignored in text fields, typed-in times (valid, invalid, Esc, one undo step each),
+  Delete on a focused row, ▶ stops at the region end and ⟲ loops until `L`, `?`/Esc/`F` and the
+  overlay button, and reload + same file restores the cuts (toast, Clear, Ctrl+Z). No FFmpeg
+  needed, so it runs in seconds. To run against another port than 3000:
+  `E2E_PORT=3211 npx playwright test`.
 - Test files are excluded from `tsconfig.json` so `next build` never type-checks them;
   `tsconfig.test.json` covers them instead (`npm run typecheck`).
 - The waveform wrapper in `ui/WaveformCard.tsx` carries `data-testid="waveform"` — keep it when
   refactoring, the smoke test drags on it. Other editor test ids: `drop-zone`, `editor-toolbar`,
   `waveform-card`, `playback-bar`, `region-list`, `region-list-compact`, `preview-modal`,
-  `toast-viewport`, `toast-success` / `toast-error` / `toast-info`.
+  `shortcuts-overlay`, `toast-viewport`, `toast-success` / `toast-error` / `toast-info`. Region rows
+  carry a `data-region-row` attribute.
+- The cut list renders start and end as two buttons inside one `<span>` whose text is exactly
+  `m:ss.d → m:ss.d` — the smoke test matches that span with an anchored regex, so don't add other
+  text inside it.
 - WaveSurfer's drag helper swallows any click within 10 ms after a drag ends. Automated tests that
   click a button immediately after dragging on the waveform must wait a moment first.
 - CI (`.github/workflows/ci.yml` at the repo root) runs lint, build, test type-check, Vitest and
@@ -489,3 +582,11 @@ break export, and the version lives in `package.json` instead of a string.
     in `EditorSession` or its hooks, which remount for every new file.
 
 11. **Using `alert()`** — use `useToast()` from `toast/ToastProvider.tsx`.
+
+12. **Adding a second keydown listener** for editor shortcuts — add the key to `shortcuts.ts` and
+    handle it in `onShortcut` instead, so the text-field/modifier rules and the Esc order stay in
+    one place. Hooks that subscribe to WaveSurfer (`useRegionPlayback`) must be called **after**
+    `useWaveSurfer` so the instance exists when their effect runs.
+
+13. **Saving the session before the restore check** — `useSessionAutosave` gates saving on a ref
+    set by the restore effect; saving the initial empty region list would delete the stored cuts.

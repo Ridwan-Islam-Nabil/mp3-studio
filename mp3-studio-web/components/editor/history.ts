@@ -21,7 +21,8 @@ export type HistAction =
   | { type: "undo" }
   | { type: "redo" }
   | { type: "reset" }                    // record an empty snapshot (undoable "clear all cuts")
-  | { type: "clear" };                   // forget everything (new file)
+  | { type: "clear" }                    // forget everything (new file)
+  | { type: "load"; snap: RegionData[] }; // start over from `snap` (restored session) — no undo past it
 
 export const initialHistory: HistState = { history: [[]], ptr: 0 };
 
@@ -41,6 +42,8 @@ export function histReducer(s: HistState, a: HistAction): HistState {
     }
     case "clear":
       return initialHistory;
+    case "load":
+      return { history: [a.snap], ptr: 0 };
   }
 }
 
