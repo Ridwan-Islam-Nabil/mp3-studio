@@ -1,27 +1,55 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
 const FIXTURE = path.join(__dirname, "fixtures", "tone-5s.mp3"); // 5 s 440 Hz sine, ~20 KB
 
-test("upload → cut → export produces an MP3 download", async ({ page }) => {
-  // Export failures surface as window.alert(); fail fast with its text instead of timing out.
-  page.on("dialog", async (dialog) => {
-    const message = dialog.message();
-    await dialog.dismiss();
-    throw new Error(`Unexpected dialog: ${message}`);
+/**
+ * Records what the COOP/COEP decision depends on (see "The COOP/COEP headers" in CLAUDE.md):
+ * whether the page is cross-origin isolated, whether SharedArrayBuffer exists, and any console
+ * errors. Printed as one `[coi]` line per test (visible in the list reporter / CI log) and added
+ * as annotations. Uncaught page errors fail the test.
+ */
+function watchDiagnostics(page: Page, testInfo: TestInfo) {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") consoleErrors.push(msg.text());
   });
+  page.on("pageerror", (err) => pageErrors.push(err.message));
 
-  // The FFmpeg core must come from our own origin (public/ffmpeg/<version>/), never a CDN.
-  // context.on("request") also sees requests made by the FFmpeg web worker.
-  const coreRequests: string[] = [];
-  page.context().on("request", (req) => {
-    if (/ffmpeg-core\.(js|wasm)$/.test(new URL(req.url()).pathname)) coreRequests.push(req.url());
-  });
+  return {
+    async record() {
+      const env = await page.evaluate(() => ({
+        crossOriginIsolated: self.crossOriginIsolated,
+        sharedArrayBuffer: typeof SharedArrayBuffer,
+      }));
+      const browser = testInfo.project.name;
+      console.log(
+        `[coi] ${browser} "${testInfo.title}": crossOriginIsolated=${env.crossOriginIsolated} ` +
+          `typeof SharedArrayBuffer=${env.sharedArrayBuffer} consoleErrors=${JSON.stringify(consoleErrors)}`,
+      );
+      testInfo.annotations.push(
+        { type: "crossOriginIsolated", description: String(env.crossOriginIsolated) },
+        { type: "SharedArrayBuffer", description: env.sharedArrayBuffer },
+        { type: "consoleErrors", description: JSON.stringify(consoleErrors) },
+      );
+      expect(pageErrors, "uncaught page errors").toEqual([]);
+    },
+  };
+}
 
+/** Rejects with the toast's text as soon as an error toast appears (Preview/Export failed). */
+async function failOnErrorToast(page: Page): Promise<never> {
+  const toast = page.getByTestId("toast-error");
+  await toast.waitFor({ state: "visible", timeout: 0 });
+  throw new Error(`Error toast: ${await toast.innerText()}`);
+}
+
+/** Opens /editor, uploads the fixture via "Browse files" and drags one cut across 30–60 %. */
+async function uploadAndCut(page: Page) {
   await page.goto("/editor");
 
-  // ── Upload via the real "Browse files" flow ───────────────────────────────
   const browse = page.getByRole("button", { name: "Browse files" });
   await expect(browse).toBeVisible({ timeout: 60_000 }); // editor is lazy-loaded (ssr: false)
   const chooserPromise = page.waitForEvent("filechooser");
@@ -34,7 +62,6 @@ test("upload → cut → export produces an MP3 download", async ({ page }) => {
   await expect(page.getByRole("button", { name: /Mark to Cut/ })).toBeEnabled();
   await expect(page.getByText(/No cuts yet/)).toBeVisible();
 
-  // ── Create a cut region by dragging across the middle of the waveform ─────
   const waveform = page.getByTestId("waveform");
   await waveform.scrollIntoViewIfNeeded();
   const box = await waveform.boundingBox();
@@ -49,11 +76,25 @@ test("upload → cut → export produces an MP3 download", async ({ page }) => {
   await expect(page.getByText(/No cuts yet/)).toBeHidden();
   await expect(page.getByText("(1)", { exact: true })).toBeVisible();
   await expect(page.getByText(/^\d+:\d{2}\.\d → \d+:\d{2}\.\d$/)).toBeVisible();
+  // WaveSurfer swallows clicks for a moment after a drag ends (see CLAUDE.md → Tests).
+  await page.waitForTimeout(100);
+}
 
-  // ── Export and check the download ─────────────────────────────────────────
+test("upload → cut → export produces an MP3 download", async ({ page }, testInfo) => {
+  const diagnostics = watchDiagnostics(page, testInfo);
+
+  // The FFmpeg core must come from our own origin (public/ffmpeg/<version>/), never a CDN.
+  // context.on("request") also sees requests made by the FFmpeg web worker.
+  const coreRequests: string[] = [];
+  page.context().on("request", (req) => {
+    if (/ffmpeg-core\.(js|wasm)$/.test(new URL(req.url()).pathname)) coreRequests.push(req.url());
+  });
+
+  await uploadAndCut(page);
+
   const downloadPromise = page.waitForEvent("download", { timeout: 3 * 60_000 });
   await page.getByRole("button", { name: /Export MP3/ }).click();
-  const download = await downloadPromise;
+  const download = await Promise.race([downloadPromise, failOnErrorToast(page)]);
 
   expect(download.suggestedFilename()).toMatch(/\.mp3$/);
   const file = await download.path();
@@ -69,4 +110,28 @@ test("upload → cut → export produces an MP3 download", async ({ page }) => {
   const origin = new URL(page.url()).origin;
   expect(coreRequests.length).toBeGreaterThan(0);
   for (const url of coreRequests) expect(url.startsWith(`${origin}/ffmpeg/`)).toBe(true);
+
+  await diagnostics.record();
+});
+
+test("upload → cut → preview plays the shortened result", async ({ page }, testInfo) => {
+  const diagnostics = watchDiagnostics(page, testInfo);
+
+  await uploadAndCut(page);
+
+  await page.getByRole("button", { name: /▶ Preview/ }).click();
+  const modal = page.getByTestId("preview-modal");
+  await Promise.race([modal.waitFor({ state: "visible", timeout: 3 * 60_000 }), failOnErrorToast(page)]);
+  await expect(page.getByRole("dialog", { name: "Preview" })).toBeVisible();
+
+  // The browser must be able to load the merged MP3: ~5 s minus a ~1.5 s cut.
+  const audio = modal.locator("audio");
+  await expect
+    .poll(() => audio.evaluate((a: HTMLAudioElement) => a.duration), { timeout: 30_000 })
+    .toBeGreaterThan(2);
+  const duration = await audio.evaluate((a: HTMLAudioElement) => a.duration);
+  expect(duration).toBeLessThan(4.8);
+  expect(await audio.evaluate((a: HTMLAudioElement) => a.error?.code ?? null)).toBeNull();
+
+  await diagnostics.record();
 });

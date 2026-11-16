@@ -32,10 +32,22 @@ jobs:
         run: npx tsc --noEmit -p tsconfig.test.json
       - run: npm test
 
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-      - name: Playwright smoke test
+      # Firefox and WebKit run here (Linux) because Playwright's Windows builds can't run
+      # the editor: WebKit on Windows has no Web Audio / MP3 playback (see CLAUDE.md → Tests).
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Playwright smoke test (Chromium, Firefox, WebKit)
         run: npm run test:e2e
+
+      # TEMPORARY evidence for the COOP/COEP decision (CLAUDE.md → "The COOP/COEP headers"):
+      # rebuild without the two headers and rerun the suite. Read the `[coi]` lines in the log.
+      # Non-blocking; delete this step once the headers are kept or removed for good.
+      - name: COOP/COEP experiment (headers off, non-blocking)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          DISABLE_COI: "1"
+        run: npm run build && npm run test:e2e
 
       - name: Upload Playwright report
         if: failure()

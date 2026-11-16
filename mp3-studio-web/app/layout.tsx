@@ -1,6 +1,15 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import PostHogProvider from "@/components/PostHogProvider";
+
+// Downloaded and self-hosted by next/font at build time: no request to Google from the
+// browser, no layout shift (size-adjusted fallback). Same weights the old <link> loaded.
+const inter = Inter({
+  subsets: ["latin"],
+  weight: ["400", "600", "700", "800", "900"],
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Online MP3 Trimmer — Multiple Cuts, No Upload, Free",
@@ -66,13 +75,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      {/* Inter is loaded via CSS globals.css @import or falls back to system-ui */}
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
-      </head>
-      <body><PostHogProvider>{children}</PostHogProvider></body>
+      <body className={inter.className}><PostHogProvider>{children}</PostHogProvider></body>
     </html>
   );
 }
