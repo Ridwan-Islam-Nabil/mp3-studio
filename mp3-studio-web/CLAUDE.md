@@ -75,7 +75,17 @@ mp3-studio-web/
 │       ├── theme.ts          ← `C` palette, button/badge/card style helpers, sliderBg, cutColor
 │       └── types.ts          ← RegionData, Region, WsRegion
 ├── lib/
-│   ├── ffmpeg.ts             ← FFmpeg.wasm wrapper (loadFFmpeg, invertRegions, trimAndExport)
+│   ├── ffmpeg.ts             ← Audio engine entry point: FFmpeg.wasm runtime (loadFFmpeg, exportAudio,
+│   │                            trimAndExport, exportSegments, detectSilence) + re-exports of lib/audio/
+│   │                            (+ ffmpeg.test.ts: public API surface)
+│   ├── audio/                ← pure builders, no FFmpeg instance, no DOM (each has a *.test.ts)
+│   │   ├── regions.ts        ← CutRegion/KeepSegment, invertRegions, keepToCuts, mergeRegions
+│   │   ├── formats.ts        ← OutputFormat, OUTPUT_FORMATS (ext/MIME/codec/muxer), encoderArgs,
+│   │   │                        IPHONE_RINGTONE_MAX_SEC
+│   │   ├── args.ts           ← ExportOptions, buildExportArgs, buildSegmentExportArgs,
+│   │   │                        buildSilenceDetectArgs, loudnorm/fade filters
+│   │   ├── silence.ts        ← parseSilenceLog, silencesToCuts, DEFAULT_SILENCE_OPTIONS
+│   │   └── log.ts            ← parseLogTime, parseInputDuration, errorLines
 │   ├── analytics.ts          ← PostHog init + typed track*() helpers
 │   └── posts.ts              ← Blog post content (array of Post objects, HTML strings)
 ├── public/
@@ -109,7 +119,7 @@ This app skips the server entirely:
       [0:a:0]atrim=start=B:end=C,asetpts=PTS-STARTPTS,afade=t=in:…,afade=t=out:…[s1];
       [0:a:0]atrim=start=D,asetpts=PTS-STARTPTS,afade=t=in:…[s2];
       [s0][s1][s2]concat=n=3:v=0:a=1[out]"
-     -map [out] -c:a libmp3lame -q:a 2 -ar 44100 -y output.mp3
+     -map [out] -c:a libmp3lame -q:a 2 -ar 44100 -f mp3 -y output.mp3
    ```
    With zero cuts there is no filter graph (`-map 0:a:0`); a single segment gets `atrim` but no
    fades. Segment edges at 0 / the end are left open so the output runs to the true end of the
@@ -147,18 +157,16 @@ came out 126 ms too long with ~155 ms dropouts at every join, plus hard-cut clic
 Xing header was fine (reported duration = decoded length). The filter graph is sample-accurate
 and encodes once.
 
-**Encoder options:** `trimAndExport(file, cuts, duration, onProgress, options?)` where
-`options = { quality?: "standard" | "high", bitrateKbps?: number }`. Default `"standard"` = VBR
-`-q:a 2` (~190 kbps); `"high"` = VBR `-q:a 0` (~245 kbps); `bitrateKbps` = CBR `-b:a` (clamped
-32–320) and overrides `quality`. No UI uses this yet.
+**Encoder options, formats, normalize, fades, split export, silence detection:** see
+"Audio Engine API" below.
 
-**Progress reporting:** `trimAndExport` reports 0–5% while writing the input, then 5–99% from the
+**Progress reporting:** every job reports 0–5% while writing the input, then 5–99% from the
 `time=` field of FFmpeg's stats log divided by the expected *output* length (the library's own
 `progress` event divides by the input length, which is wrong once parts are cut), then 100%.
-In `AudioEditor.runFFmpeg()`, loading maps to 0–20% (`loadFFmpeg` reports only 0 and 100) and
-trimming to 20–100%.
+Progress never goes backwards. In `useFFmpegJob`, loading maps to 0–20% (`loadFFmpeg` reports
+only 0 and 100) and trimming to 20–100%.
 
-**Errors:** `loadFFmpeg()` wraps failures in `FFmpegLoadError`. `trimAndExport` throws if
+**Errors:** `loadFFmpeg()` wraps failures in `FFmpegLoadError`. Every job throws if
 `exec` returns a non-zero exit code (with the last error lines from the log), and after **any**
 failure it terminates the instance so the next attempt reloads a fresh one (a wasm OOM can leave
 the heap unusable). `isLikelyOutOfMemory(e)` classifies `RangeError` / "memory access out of
@@ -198,10 +206,118 @@ mind when embedding anything. Same-origin files (like the self-hosted core) are 
 
 ---
 
+## Audio Engine API (lib/ffmpeg.ts + lib/audio/)
+
+The processing layer for the editor and for the wave-4 feature pages (remove silence, normalize,
+split export, ringtone maker, format choice, keep mode). **No UI uses the new functions yet.**
+Import everything from `@/lib/ffmpeg`; it re-exports the pure modules in `lib/audio/`.
+
+**Layering:** `lib/audio/*` are pure (no FFmpeg instance, no DOM, no React) and unit-tested in
+Node. They decide *what* FFmpeg runs. `lib/ffmpeg.ts` owns the single FFmpeg instance and runs
+jobs. Jobs are queued (never interleave on the shared instance), each writes the input into the
+virtual FS, runs **one** `exec`, reads the outputs back and deletes every file. Call
+`loadFFmpeg()` first (idempotent); after any failed job the instance is terminated and the next
+`loadFFmpeg()` reloads it.
+
+### Jobs (need `loadFFmpeg()`)
+
+| Function | Returns | Notes |
+|---|---|---|
+| `exportAudio(file, cuts, duration, options?)` | `ExportResult { blob, format, mimeType, extension, durationSec }` | One output file. `options` = `ExportOptions` + `onProgress` |
+| `trimAndExport(file, cuts, duration, onProgress?, options?)` | `Blob` | Original API (the editor uses it); wraps `exportAudio`. `blob.type` is the format's MIME type |
+| `exportSegments(file, cuts, duration, options?)` | `SegmentResult[]` (`ExportResult` + `fileName`, `index`, `start`, `end`) | One file per kept segment, named `<baseName>-01.<ext>`, `-02`, … (3 digits from 100 segments). `options.baseName` defaults to the source name without extension. Zipping is the caller's job |
+| `detectSilence(file, options?)` | `CutRegion[]` | `{ thresholdDb = -40, minSilenceSec = 0.7, paddingSec = 0.15, duration?, onProgress? }`. Cuts are padded, merged, clamped; ready to merge with user cuts or to show for review |
+| `loadFFmpeg(onProgress?)`, `isFFmpegLoaded()`, `isLikelyOutOfMemory(e)`, `FFmpegLoadError`, `getAudioDuration(file)` | | unchanged |
+
+`cuts` are always regions to **delete**; with `[]` the whole file is exported. Everything cut →
+throws `"Nothing to export — every part of the audio is cut."` (before running FFmpeg, so the
+instance is kept).
+
+### `ExportOptions`
+
+| Option | Default | Effect |
+|---|---|---|
+| `format` | `"mp3"` | `"mp3"` libmp3lame · `"wav"` pcm_s16le · `"m4a"` AAC in the `ipod` (MPEG-4) muxer · `"m4r"` same bytes as m4a, `.m4r` extension (iPhone ringtone). MIME: `audio/mpeg`, `audio/wav`, `audio/mp4`, `audio/mp4`. All outputs are 44.1 kHz; channels are kept. m4a/m4r get `-movflags +faststart` |
+| `quality` | `"standard"` | MP3: VBR `-q:a 2` (~190 kbps) / `"high"` `-q:a 0` (~245 kbps). AAC: 192 / 256 kbps CBR. WAV: ignored |
+| `bitrateKbps` | — | CBR, clamped 32–320, overrides `quality`. WAV: ignored |
+| `normalize` | `false` | Single-pass `loudnorm=I=-16:TP=-1.5:LRA=11` (`LOUDNORM_TARGET`) at the end of the graph, after the concat |
+| `fade` | — | `{ inSec?, outSec? }` fade-in/out at the very start/end of the output file (after normalize). Scaled down proportionally if longer than the output. Positions use the expected output length (sum of kept segments) |
+
+`exportSegments` applies `normalize` and `fade` to **each file** separately, and adds a 12 ms
+de-click fade at every segment edge that was a cut point (not at the source's own start/end).
+
+### Pure helpers
+
+- **Regions** (`audio/regions.ts`): `invertRegions(cuts, duration)` (cut → keep);
+  `keepToCuts(keepRegions, duration)` (**keep mode**: the user marks what to keep, convert once and
+  use the normal export path; `invertRegions(keepToCuts(k, d), d)` returns `k` sorted and merged;
+  no keep regions → the whole file is cut); `mergeRegions`, `totalLength`, `MIN_SEGMENT_SEC`
+  (0.01 s: shorter gaps are dropped).
+- **Formats** (`audio/formats.ts`): `OUTPUT_FORMATS`, `formatInfo(format)`,
+  `withExtension(name, format)`, `encoderArgs(format, options)`, `IPHONE_RINGTONE_MAX_SEC` (40 —
+  iOS ignores longer ringtones; Android has no fixed limit; the engine does not enforce it),
+  `AAC_BITRATE_KBPS`, `OUTPUT_SAMPLE_RATE`.
+- **Args** (`audio/args.ts`): `buildExportArgs(input, keep, duration, output, options)`,
+  `buildSegmentExportArgs(input, keep, duration, outputNames, options)`,
+  `buildSilenceDetectArgs(input, { thresholdDb, minSilenceSec })`, `outputFilters`,
+  `segmentFilters`, `loudnormFilter`, `segmentNumber`, `JOIN_FADE_SEC`, `EDGE_EPSILON_SEC`.
+- **Silence** (`audio/silence.ts`): `parseSilenceLog(log, duration?)` (string or lines; handles
+  the wasm log format, where the `[silencedetect @ …]` prefix arrives as a separate event and the
+  final `silence_end` comes after the statistics; a trailing unterminated silence closes at
+  `duration`), `silencesToCuts(silences, duration, paddingSec)` (padding next to the remaining
+  audio, none at the file edges; a silence within 50 ms of the start/end counts as touching it;
+  cuts < 50 ms dropped). `detectSilence` takes the duration from `options.duration`, else from the
+  last stats `time=` (the decoded length; the MP3 header's `Duration:` is only an estimate —
+  180.04 s for a 180.00 s file — which left a 0.15 s sliver at the end).
+- **Log** (`audio/log.ts`): `parseLogTime`, `parseInputDuration`, `errorLines`.
+
+### Design choices
+
+- **Split export = one FFmpeg run with one output per segment.** The input is decoded once and
+  every `[0:a:0]atrim…[oN]` chain feeds its own encoder. One run per segment is slower because
+  `atrim` doesn't seek: run N decodes the source from 0 up to segment N. (Input seeking with `-ss`
+  is not an option — see "Why one filter graph" above.) The first output is
+  `-map 0:a:0 -c copy -f null -`: it costs ~nothing and makes the stats `time=` follow the input
+  position, which is what progress needs (the segment outputs' times jump around).
+- **Formats:** encoder availability was checked on the bundled core (`@ffmpeg/core` 0.12.6 =
+  FFmpeg 5.1.4) with `-encoders` / `-muxers` / `-filters`. Present: encoders `libmp3lame`,
+  `aac`, `pcm_s16le`, `alac`, `flac`, `libopus`, `libvorbis`; muxers `mp3`, `wav`, `ipod`,
+  `mp4`, `ogg`, `flac`; filters `loudnorm`, `silencedetect`, `afade`, `atrim`, `asetpts`,
+  `concat`, `aresample`. So FLAC/Opus/OGG/ALAC outputs could be added to `OUTPUT_FORMATS` without a
+  new core.
+- **Normalize is single-pass `loudnorm` (dynamic mode)**, which upsamples to 192 kHz internally
+  for true-peak detection — that's why it's slow (below). A faster alternative if needed: measure
+  with `ebur128` (0.45 s for 3 min) then apply a linear `volume` + `alimiter` (1.4 s) ≈ 2 s total
+  instead of ~13 s; not implemented.
+
+### Measured performance
+
+Headless Chromium (Playwright), `next dev`, single-threaded core, 180 s stereo MP3 (97 kbps,
+44.1 kHz) with silent stretches at 30–33 s, 90–91.5 s, 150–150.4 s and 177–180 s. Outputs checked
+with native `ffprobe` / `ebur128`.
+
+| Job | Time | Output check |
+|---|---|---|
+| `loadFFmpeg()` (core in HTTP cache of the dev server) | 1.3 s | |
+| MP3, 2 cuts → 160 s | 1.9–2.2 s | 160.000 s |
+| same + `normalize` | **13.3 s** (~6.5× slower) | -29.2 → **-16.2 LUFS**, true peak -8.6 dBFS |
+| MP3 whole file 180 s / + `normalize` | 2.3 s / 15.0 s | |
+| WAV 30 s clip | 0.18 s | pcm_s16le, 30.000 s |
+| M4A 30 s clip / 160 s | 0.87 s / 4.0 s (AAC ≈ 2× LAME) | aac 192 kbps, brand `M4A `, 30.000 s |
+| M4R ringtone 35 s, `normalize` + `fade {in 1, out 2}` | 2.7 s | 35.000 s, -16.3 LUFS, quiet first/last 0.4 s |
+| `detectSilence()` 180 s | 0.3–0.5 s | finds 30.02–33.02, 90.02–91.51, 177.0–180 (150.0–150.4 is below `minSilenceSec`) |
+| export with the silence cuts | | 173.42 s |
+| `exportSegments` 3 segments: one run vs one run per segment | 1.5–2.3 s vs 3.0 s | 30.172 / 57.303 / 85.796 s |
+| `exportSegments` 10 segments: one run vs one run per segment | 3.2 s vs 4.7 s | |
+| keep mode `keepToCuts([5–15, 100–110])` → export | | 20.000 s |
+
+---
+
 ## How Cut Regions Work
 
 The UI marks sections to **DELETE** (shown in red on the waveform).
-On export, `invertRegions()` in `lib/ffmpeg.ts` flips them to find what to **keep**.
+On export, `invertRegions()` (`lib/audio/regions.ts`, re-exported by `lib/ffmpeg.ts`) flips them
+to find what to **keep**. A future "keep mode" converts the other way with `keepToCuts()`.
 
 Example:
 ```
@@ -365,7 +481,8 @@ WaveSurfer and FFmpeg need browser APIs, and loading them eagerly froze the brow
 `ssr: false` is only allowed inside a client component — that's why `EditorLoader` exists instead
 of calling `dynamic()` from `app/editor/page.tsx` directly.
 
-`lib/ffmpeg.ts` and `lib/posts.ts` have no React imports.
+`lib/ffmpeg.ts`, `lib/audio/` and `lib/posts.ts` have no React imports (`lib/audio/` has no DOM
+or FFmpeg imports either, so it runs in Vitest's Node environment).
 
 ---
 
@@ -399,7 +516,11 @@ The COOP/COEP headers from `next.config.ts` apply in development too.
 ### Tests
 
 - **Unit (Vitest)** — `lib/posts.test.ts` (slugs unique and URL-safe, required fields, valid
-  dates), `lib/ffmpeg.test.ts` (`invertRegions`, mirroring the Python tests of the local app),
+  dates), `lib/audio/*.test.ts` (`regions.test.ts`: `invertRegions`, mirroring the Python tests
+  of the local app, and the `keepToCuts` round trip; `args.test.ts`: filter graphs and args per
+  format / normalize / fade / split; `formats.test.ts`; `silence.test.ts`: silencedetect logs
+  captured from the wasm core and native FFmpeg; `log.test.ts`), `lib/ffmpeg.test.ts` (public
+  API surface of the entry point),
   `components/editor/history.test.ts` (undo/redo reducer: push drops the redo branch, undo/redo
   at the ends are no-ops, reset, clear, immutability) and `components/editor/editorUtils.test.ts`
   (time format, zoom scale, file metadata). Vitest runs in Node, so keep `history.ts` /

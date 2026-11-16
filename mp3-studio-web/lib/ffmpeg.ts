@@ -1,43 +1,65 @@
 /**
  * lib/ffmpeg.ts
  * ─────────────────────────────────────────────────────────────────────────────
- * Browser-side FFmpeg wrapper using @ffmpeg/ffmpeg (WebAssembly).
+ * Public entry point of the audio engine: the FFmpeg.wasm runtime (load, run
+ * jobs, read results) plus re-exports of the pure builders in lib/audio/.
+ * Import everything from here ("@/lib/ffmpeg").
  *
- * WHY THIS EXISTS:
- *   We run FFmpeg entirely in the user's browser — no server needed, zero cost.
- *   The @ffmpeg/ffmpeg library loads a ~30MB WebAssembly binary on first use and
- *   caches it automatically. All audio processing is local and private.
+ * We run FFmpeg entirely in the user's browser (@ffmpeg/ffmpeg, single-threaded
+ * core, self-hosted under /ffmpeg/<version>/) — no server, all audio stays local.
  *
- * REQUIREMENT:
- *   The Next.js config must set these headers or FFmpeg will fail:
- *     Cross-Origin-Opener-Policy: same-origin
- *     Cross-Origin-Embedder-Policy: require-corp
- *   These are already set in next.config.ts.
+ * MODULES:
+ *   lib/audio/regions.ts — invertRegions, keepToCuts, mergeRegions (pure)
+ *   lib/audio/formats.ts — output formats, MIME types, encoder args (pure)
+ *   lib/audio/args.ts    — FFmpeg argument / filter-graph builders (pure)
+ *   lib/audio/silence.ts — silencedetect log parsing → cut regions (pure)
+ *   lib/audio/log.ts     — FFmpeg log line parsers (pure)
+ *   lib/ffmpeg.ts        — this file: runtime + re-exports
  *
- * EXPORTS:
- *   loadFFmpeg()         — loads the wasm binary (idempotent; throws FFmpegLoadError)
- *   isLikelyOutOfMemory()— classifies an error as a probable wasm OOM
- *   invertRegions()      — cut regions → kept segments (pure)
- *   buildExportArgs()    — kept segments → FFmpeg argument list (pure)
- *   trimAndExport()      — takes cut regions, inverts them, stitches kept parts
- *   getAudioDuration()   — reads duration from an audio file
+ * RUNTIME EXPORTS:
+ *   loadFFmpeg()          — loads the wasm binary (idempotent; throws FFmpegLoadError)
+ *   isFFmpegLoaded()
+ *   isLikelyOutOfMemory() — classifies an error as a probable wasm OOM
+ *   exportAudio()         — cut regions → one file in any format ({ blob, mimeType, extension, … })
+ *   trimAndExport()       — original API: same as exportAudio() but returns just the Blob
+ *   exportSegments()      — cut regions → one file per kept segment
+ *   detectSilence()       — silencedetect → CutRegion[] ("remove silence")
+ *   getAudioDuration()    — reads duration from an audio file (no FFmpeg)
+ *
+ * All job functions require loadFFmpeg() to have resolved. Jobs are queued, so
+ * two calls never interleave on the shared instance. After ANY failed job the
+ * instance is terminated (an OOM can leave the wasm heap unusable) and the next
+ * loadFFmpeg() call loads a fresh one.
  *
  * HOW CUT REGIONS WORK:
- *   The UI marks sections to DELETE (red on waveform).
- *   This module inverts them to find KEPT segments, then runs ONE FFmpeg pass:
- *     decode once → atrim each kept segment → short fade at interior joins →
- *     concat filter → encode once to MP3.
- *   See buildExportArgs() for why it is a single filter graph.
+ *   The UI marks sections to DELETE (red on waveform). invertRegions() turns them
+ *   into KEPT segments; one FFmpeg pass decodes once → atrim each kept segment →
+ *   short fade at interior joins → concat → (loudnorm) → (fades) → encode once.
+ *   For keep mode, convert with keepToCuts() first.
  */
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
+import {
+  buildExportArgs, buildSegmentExportArgs, buildSilenceDetectArgs, segmentNumber,
+  type ExportOptions,
+} from "./audio/args";
+import { DEFAULT_FORMAT, formatInfo, type OutputFormat } from "./audio/formats";
+import { errorLines, parseInputDuration, parseLogTime } from "./audio/log";
+import { invertRegions, totalLength, type CutRegion } from "./audio/regions";
+import { DEFAULT_SILENCE_OPTIONS, parseSilenceLog, silencesToCuts, type SilenceOptions } from "./audio/silence";
+
+export * from "./audio/regions";
+export * from "./audio/formats";
+export * from "./audio/args";
+export * from "./audio/silence";
+export { parseLogTime, parseInputDuration } from "./audio/log";
+
+export type ProgressCallback = (percent: number) => void;
 
 // Singleton — only one FFmpeg instance per page
 let ffmpeg: FFmpeg | null = null;
 let loaded = false;
-
-export type ProgressCallback = (percent: number) => void;
 
 /** Thrown by loadFFmpeg() when the core download / instantiation fails. */
 export class FFmpegLoadError extends Error {
@@ -103,8 +125,8 @@ export function isFFmpegLoaded(): boolean {
 
 /**
  * Throws away the current FFmpeg instance. Used after a failed run: an
- * out-of-memory abort can leave the wasm heap unusable, so the next Preview /
- * Export starts from a fresh instance (loadFFmpeg() reloads it).
+ * out-of-memory abort can leave the wasm heap unusable, so the next job starts
+ * from a fresh instance (loadFFmpeg() reloads it).
  */
 function resetFFmpeg(): void {
   try { ffmpeg?.terminate(); } catch { /* already dead */ }
@@ -112,188 +134,59 @@ function resetFFmpeg(): void {
   loaded = false;
 }
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Job runner ──────────────────────────────────────────────────────────────
 
-export interface CutRegion {
-  start: number; // seconds
-  end: number;   // seconds
-}
+/** Serializes jobs: the instance has one virtual FS and one log stream. */
+let queue: Promise<unknown> = Promise.resolve();
 
-export interface KeepSegment {
-  start: number;
-  end: number;
-}
-
-export interface ExportOptions {
+interface JobSpec {
+  file: File;
+  inputName: string;
+  args: string[];
+  /** Files to read back from the virtual FS after a successful run. */
+  outputNames: string[];
   /**
-   * 'standard' (default) — LAME VBR -q:a 2 (~190 kbps), the original behavior.
-   * 'high'               — LAME VBR -q:a 0 (~245 kbps).
-   * Ignored when `bitrateKbps` is set.
+   * Seconds of media the stats `time=` field counts up to (5–99 % of progress).
+   * A function receives the log so far, for jobs that only learn it from the
+   * input header (`Duration:`).
    */
-  quality?: "standard" | "high";
-  /** Constant bitrate in kbps (clamped to 32–320). Overrides `quality`. */
-  bitrateKbps?: number;
+  expectedSec: number | ((logSoFar: string[]) => number | null);
+  onProgress?: ProgressCallback;
 }
 
-// ─── Core helpers ────────────────────────────────────────────────────────────
-
-/**
- * Inverts cut regions to find which parts of the audio to keep.
- * Example: audio is 60s, cuts are [10-20, 40-50]
- *          → keep [0-10, 20-40, 50-60]
- */
-export function invertRegions(cuts: CutRegion[], duration: number): KeepSegment[] {
-  if (cuts.length === 0) {
-    return [{ start: 0, end: duration }];
-  }
-
-  // Clamp cuts to the audio, drop empty ones, sort by start time
-  const sorted = cuts
-    .map((c) => ({ start: Math.max(0, c.start), end: Math.min(duration, c.end) }))
-    .filter((c) => c.end > c.start)
-    .sort((a, b) => a.start - b.start);
-  const keep: KeepSegment[] = [];
-  let cursor = 0;
-
-  for (const cut of sorted) {
-    if (cut.start > cursor + 0.01) {
-      keep.push({ start: cursor, end: cut.start });
-    }
-    // max(): a cut nested inside an earlier one must not move the cursor back
-    cursor = Math.max(cursor, cut.end);
-  }
-
-  if (cursor < duration - 0.01) {
-    keep.push({ start: cursor, end: duration });
-  }
-
-  return keep;
+interface JobResult {
+  outputs: Uint8Array[];
+  log: string[];
 }
 
-/** Fade length applied on each side of an interior join (seconds). */
-const JOIN_FADE_SEC = 0.012;
-
-/** Edges closer than this to the file start/end are treated as the start/end. */
-const EDGE_EPSILON_SEC = 0.01;
-
-/**
- * Builds the FFmpeg arguments for one export pass.
- *
- * WHY A SINGLE FILTER GRAPH (instead of cutting seg_N.mp3 files and joining
- * them with the concat demuxer + `-c copy`, which this app used to do):
- *   - Input-seeking (`-ss` before `-i`) into an MP3 decoded the first ~100 ms
- *     after every seek as silence, so each join had an audible dropout.
- *   - Copy-concatenating MP3s keeps every segment's encoder delay/padding
- *     (~25–50 ms of near-silence per segment) and produces non-monotonic DTS.
- *   - Hard cuts at arbitrary sample positions click.
- *   Decoding once and trimming with `atrim` is sample-accurate, a short
- *   fade-out/fade-in at each interior join removes the click, and the audio is
- *   encoded exactly once. The file's very start and end are never faded.
- *
- * Segment edges at 0 / `duration` are left open so the output runs to the true
- * start/end of the stream even if the browser-reported duration is slightly off.
- */
-export function buildExportArgs(
-  inputName: string,
-  keep: KeepSegment[],
-  duration: number,
-  outputName: string,
-  options: ExportOptions = {}
-): string[] {
-  if (keep.length === 0) throw new Error("Nothing to export — every part of the audio is cut.");
-
-  const n = keep.length;
-  const chains = keep.map((seg, i) => {
-    const filters: string[] = [];
-    const trim: string[] = [];
-    if (seg.start > EDGE_EPSILON_SEC) trim.push(`start=${seg.start.toFixed(6)}`);
-    if (seg.end < duration - EDGE_EPSILON_SEC) trim.push(`end=${seg.end.toFixed(6)}`);
-    if (trim.length) filters.push(`atrim=${trim.join(":")}`, "asetpts=PTS-STARTPTS");
-
-    // Interior joins only: fade out the end of every segment except the last,
-    // fade in the start of every segment except the first. Never longer than
-    // half the segment so the two fades can't overlap.
-    const segDur = seg.end - seg.start;
-    const fade = Math.min(JOIN_FADE_SEC, segDur / 2);
-    if (n > 1 && fade > 0) {
-      if (i > 0) filters.push(`afade=t=in:st=0:d=${fade.toFixed(6)}`);
-      if (i < n - 1) filters.push(`afade=t=out:st=${(segDur - fade).toFixed(6)}:d=${fade.toFixed(6)}`);
-    }
-    return filters;
-  });
-
-  const args = ["-i", inputName];
-
-  if (n === 1 && chains[0].length === 0) {
-    // Zero cuts: whole stream, no filter graph needed.
-    args.push("-map", "0:a:0");
-  } else if (n === 1) {
-    args.push("-filter_complex", `[0:a:0]${chains[0].join(",")}[out]`, "-map", "[out]");
-  } else {
-    const parts = chains.map((f, i) => `[0:a:0]${f.length ? f.join(",") : "anull"}[s${i}]`);
-    const inputs = chains.map((_, i) => `[s${i}]`).join("");
-    parts.push(`${inputs}concat=n=${n}:v=0:a=1[out]`);
-    args.push("-filter_complex", parts.join(";"), "-map", "[out]");
-  }
-
-  args.push("-c:a", "libmp3lame");
-  if (options.bitrateKbps !== undefined && Number.isFinite(options.bitrateKbps)) {
-    const kbps = Math.round(Math.min(320, Math.max(32, options.bitrateKbps)));
-    args.push("-b:a", `${kbps}k`);
-  } else {
-    // VBR: q 2 ≈ 190 kbps (default), q 0 ≈ 245 kbps
-    args.push("-q:a", options.quality === "high" ? "0" : "2");
-  }
-  args.push("-ar", "44100", "-y", outputName);
-  return args;
+function runJob(spec: JobSpec): Promise<JobResult> {
+  const next = queue.then(() => runJobNow(spec));
+  queue = next.catch(() => {});
+  return next;
 }
 
-/** Parses the `time=HH:MM:SS.xx` field of an FFmpeg stats log line. */
-function parseLogTime(line: string): number | null {
-  const m = /time=\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/.exec(line);
-  if (!m) return null;
-  return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
-}
-
-// ─── Main export function ────────────────────────────────────────────────────
-
-/**
- * Trims audio by removing cut regions and returns the result as an MP3 Blob.
- *
- * @param file         The source audio File (any format)
- * @param cutRegions   Array of {start, end} sections to REMOVE
- * @param duration     Total duration of the source audio in seconds
- * @param onProgress   Optional callback with 0-100 progress value
- * @param options      Optional encoder settings (defaults to VBR -q:a 2)
- * @returns            Blob of the exported MP3
- */
-export async function trimAndExport(
-  file: File,
-  cutRegions: CutRegion[],
-  duration: number,
-  onProgress?: ProgressCallback,
-  options: ExportOptions = {}
-): Promise<Blob> {
+async function runJobNow({ file, inputName, args, outputNames, expectedSec, onProgress }: JobSpec): Promise<JobResult> {
   const ff = ffmpeg;
   if (!ff || !loaded) throw new Error("FFmpeg not loaded. Call loadFFmpeg() first.");
 
-  const keep = invertRegions(cutRegions, duration);
-  const outputSec = keep.reduce((s, k) => s + (k.end - k.start), 0);
-  const inputName = "input" + getExtension(file.name);
-  const outputName = "output.mp3";
-  const args = buildExportArgs(inputName, keep, duration, outputName, options);
-
-  // Progress over the whole job: 0–5% writing the input, 5–99% encoding
-  // (encoded output time / expected output length), 100% when the Blob is ready.
+  // Progress over the whole job: 0–5 % writing the input, 5–99 % running
+  // (stats `time=` / expected seconds), 100 % when the outputs are read back.
   // Parsed from the stats log because @ffmpeg/ffmpeg's own "progress" event
   // divides by the INPUT duration, which is wrong once parts are cut out.
-  const report = (p: number) => onProgress?.(Math.max(0, Math.min(100, Math.round(p))));
-  const recentLogs: string[] = [];
+  // Never goes backwards.
+  let last = -1;
+  const report = (p: number) => {
+    const v = Math.max(0, Math.min(100, Math.round(p)));
+    if (v > last) { last = v; onProgress?.(v); }
+  };
+
+  const log: string[] = [];
   const onLog = ({ message }: { message: string }) => {
-    recentLogs.push(message);
-    if (recentLogs.length > 30) recentLogs.shift();
+    log.push(message);
     const t = parseLogTime(message);
-    if (t !== null && outputSec > 0) report(5 + Math.min(1, t / outputSec) * 94);
+    if (t === null) return;
+    const total = typeof expectedSec === "function" ? expectedSec(log) : expectedSec;
+    if (total && total > 0) report(5 + Math.min(1, t / total) * 94);
   };
 
   ff.on("log", onLog);
@@ -305,13 +198,14 @@ export async function trimAndExport(
 
     const code = await ff.exec(args);
     if (code !== 0) {
-      const detail = recentLogs.filter((l) => /error|invalid|failed|cannot|unable/i.test(l)).slice(-3);
+      const detail = errorLines(log.slice(-30));
       throw new Error(`FFmpeg exited with code ${code}${detail.length ? ": " + detail.join(" | ") : ""}`);
     }
 
-    const outputData = (await ff.readFile(outputName)) as Uint8Array;
+    const outputs: Uint8Array[] = [];
+    for (const name of outputNames) outputs.push((await ff.readFile(name)) as Uint8Array);
     report(100);
-    return new Blob([outputData as unknown as BlobPart], { type: "audio/mpeg" });
+    return { outputs, log };
   } catch (e) {
     failed = true;
     throw e;
@@ -320,17 +214,184 @@ export async function trimAndExport(
     if (failed) {
       resetFFmpeg();
     } else {
-      // Free the virtual filesystem (both files live in wasm memory)
-      await ff.deleteFile(inputName).catch(() => {});
-      await ff.deleteFile(outputName).catch(() => {});
+      // Free the virtual filesystem (every file lives in wasm memory)
+      for (const name of [inputName, ...outputNames]) await ff.deleteFile(name).catch(() => {});
     }
   }
+}
+
+function toBlob(data: Uint8Array, mimeType: string): Blob {
+  return new Blob([data as unknown as BlobPart], { type: mimeType });
+}
+
+// ─── Export ──────────────────────────────────────────────────────────────────
+
+export interface ExportResult {
+  blob: Blob;
+  format: OutputFormat;
+  /** Same as `blob.type`. */
+  mimeType: string;
+  /** Without the dot, e.g. "m4r". */
+  extension: string;
+  /** Expected length of the output (sum of the kept segments), seconds. */
+  durationSec: number;
+}
+
+export interface ExportJobOptions extends ExportOptions {
+  /** 0–100. */
+  onProgress?: ProgressCallback;
+}
+
+/**
+ * Removes the cut regions and encodes the rest as ONE file.
+ *
+ * @param file      The source audio File (any format FFmpeg can decode)
+ * @param cuts      Sections to REMOVE ({start, end} seconds); [] = whole file
+ * @param duration  Total duration of the source in seconds
+ * @param options   format ('mp3' | 'wav' | 'm4a' | 'm4r'), quality / bitrateKbps,
+ *                  normalize, fade, onProgress
+ */
+export async function exportAudio(
+  file: File,
+  cuts: CutRegion[],
+  duration: number,
+  options: ExportJobOptions = {}
+): Promise<ExportResult> {
+  const format = options.format ?? DEFAULT_FORMAT;
+  const info = formatInfo(format);
+  const keep = invertRegions(cuts, duration);
+  const outputSec = totalLength(keep);
+  const inputName = "input" + getExtension(file.name);
+  const outputName = `output.${info.extension}`;
+  const args = buildExportArgs(inputName, keep, duration, outputName, { ...options, format });
+
+  const { outputs } = await runJob({
+    file, inputName, args, outputNames: [outputName], expectedSec: outputSec, onProgress: options.onProgress,
+  });
+  return {
+    blob: toBlob(outputs[0], info.mimeType),
+    format,
+    mimeType: info.mimeType,
+    extension: info.extension,
+    durationSec: outputSec,
+  };
+}
+
+/**
+ * Original export API, kept for the editor: removes the cut regions and returns
+ * the result as a Blob (MP3 unless `options.format` says otherwise; `blob.type`
+ * is the format's MIME type). Prefer exportAudio() in new code — it also
+ * returns the extension.
+ */
+export async function trimAndExport(
+  file: File,
+  cutRegions: CutRegion[],
+  duration: number,
+  onProgress?: ProgressCallback,
+  options: ExportOptions = {}
+): Promise<Blob> {
+  return (await exportAudio(file, cutRegions, duration, { ...options, onProgress })).blob;
+}
+
+export interface SegmentExportOptions extends ExportJobOptions {
+  /** File name stem: "talk" → "talk-01.mp3", "talk-02.mp3", … Default: the source name without extension. */
+  baseName?: string;
+}
+
+export interface SegmentResult extends ExportResult {
+  /** e.g. "talk-01.mp3" */
+  fileName: string;
+  /** 0-based position in the output order. */
+  index: number;
+  /** Where the segment came from in the source (seconds). */
+  start: number;
+  end: number;
+}
+
+/**
+ * Exports every kept segment (everything between the cuts) as its own file, in
+ * one FFmpeg run (see buildSegmentExportArgs() for why one run). Options apply
+ * to each file: `normalize` normalizes each file separately, `fade` fades each
+ * file's start/end. Throws if everything is cut.
+ */
+export async function exportSegments(
+  file: File,
+  cuts: CutRegion[],
+  duration: number,
+  options: SegmentExportOptions = {}
+): Promise<SegmentResult[]> {
+  const format = options.format ?? DEFAULT_FORMAT;
+  const info = formatInfo(format);
+  const keep = invertRegions(cuts, duration);
+  const inputName = "input" + getExtension(file.name);
+  const vfsNames = keep.map((_, i) => `seg-${segmentNumber(i, keep.length)}.${info.extension}`);
+  const args = buildSegmentExportArgs(inputName, keep, duration, vfsNames, { ...options, format });
+  const stem = options.baseName?.trim() || stripExtension(file.name) || "audio";
+
+  const { outputs } = await runJob({
+    file, inputName, args, outputNames: vfsNames, expectedSec: duration, onProgress: options.onProgress,
+  });
+  return keep.map((seg, i) => ({
+    blob: toBlob(outputs[i], info.mimeType),
+    format,
+    mimeType: info.mimeType,
+    extension: info.extension,
+    durationSec: seg.end - seg.start,
+    fileName: `${stem}-${segmentNumber(i, keep.length)}.${info.extension}`,
+    index: i,
+    start: seg.start,
+    end: seg.end,
+  }));
+}
+
+// ─── Silence detection ───────────────────────────────────────────────────────
+
+export interface DetectSilenceOptions extends SilenceOptions {
+  /**
+   * Source duration in seconds (e.g. from WaveSurfer). Used to close a silence
+   * that runs to the end and to clamp the result. Default: read from FFmpeg's
+   * input header.
+   */
+  duration?: number;
+  onProgress?: ProgressCallback;
+}
+
+/**
+ * Finds silent stretches with FFmpeg's `silencedetect` and returns them as cut
+ * regions (padding kept next to the remaining audio, merged, clamped to the
+ * duration) — ready to merge with the user's cuts or show for review.
+ *
+ * Defaults: thresholdDb -40, minSilenceSec 0.7, paddingSec 0.15.
+ */
+export async function detectSilence(file: File, options: DetectSilenceOptions = {}): Promise<CutRegion[]> {
+  const thresholdDb = options.thresholdDb ?? DEFAULT_SILENCE_OPTIONS.thresholdDb;
+  const minSilenceSec = options.minSilenceSec ?? DEFAULT_SILENCE_OPTIONS.minSilenceSec;
+  const paddingSec = options.paddingSec ?? DEFAULT_SILENCE_OPTIONS.paddingSec;
+  const inputName = "input" + getExtension(file.name);
+  const args = buildSilenceDetectArgs(inputName, { thresholdDb, minSilenceSec });
+
+  let headerDuration: number | null = null;
+  const { log } = await runJob({
+    file, inputName, args, outputNames: [], onProgress: options.onProgress,
+    expectedSec: (lines) => {
+      if (options.duration) return options.duration;
+      headerDuration ??= parseInputDuration(lines.join("\n"));
+      return headerDuration;
+    },
+  });
+
+  // The final stats `time=` is the decoded length; the header's Duration is only
+  // an estimate for MP3 (180.04 s for a 180.00 s file in testing), which would
+  // leave a padded sliver after a silence that runs to the end.
+  const duration = options.duration ?? lastLogTime(log) ?? parseInputDuration(log.join("\n"));
+  if (duration === null) throw new Error("detectSilence: could not determine the audio duration; pass options.duration.");
+  return silencesToCuts(parseSilenceLog(log, duration), duration, paddingSec);
 }
 
 // ─── Duration helper ─────────────────────────────────────────────────────────
 
 /**
- * Returns the duration of an audio File in seconds using the Web Audio API.
+ * Returns the duration of an audio File in seconds using an <audio> element.
  * This is fast (no FFmpeg needed) and works in all modern browsers.
  */
 export async function getAudioDuration(file: File): Promise<number> {
@@ -350,4 +411,17 @@ export async function getAudioDuration(file: File): Promise<number> {
 function getExtension(filename: string): string {
   const parts = filename.split(".");
   return parts.length > 1 ? "." + parts.pop()!.toLowerCase() : ".mp3";
+}
+
+function stripExtension(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  return dot > 0 ? filename.slice(0, dot) : filename;
+}
+
+function lastLogTime(log: readonly string[]): number | null {
+  for (let i = log.length - 1; i >= 0; i--) {
+    const t = parseLogTime(log[i]);
+    if (t !== null) return t;
+  }
+  return null;
 }
