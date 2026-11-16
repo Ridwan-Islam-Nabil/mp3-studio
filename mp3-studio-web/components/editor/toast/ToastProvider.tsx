@@ -6,6 +6,8 @@
  *   toast.success("Exported song.mp3");
  *   toast.error("Export failed.", "details…");
  *
+ *   toast.info("Restored 3 cuts", undefined, { action: { label: "Clear", onClick: clear } });
+ *
  * Toasts stack bottom-right, above the feedback button and above modals/fullscreen.
  * They auto-dismiss (success/info 5 s, errors 10 s), pause while hovered or focused, and have a
  * close button. Errors use role="alert" (announced immediately), others role="status"; the
@@ -23,6 +25,13 @@ export type ToastKind = "success" | "error" | "info";
 export interface ToastOptions {
   /** Auto-dismiss delay in ms. 0 = stay until closed. */
   duration?: number;
+  /** Optional button in the toast (e.g. "Clear"). Clicking it runs onClick and dismisses. */
+  action?: ToastAction;
+}
+
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
 }
 
 interface ToastItem {
@@ -31,6 +40,7 @@ interface ToastItem {
   title: string;
   message?: string;
   duration: number;
+  action?: ToastAction;
 }
 
 export interface ToastApi {
@@ -62,7 +72,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const show = useCallback<ToastApi["show"]>((kind, title, message, opts) => {
     const id = nextId.current++;
     const duration = opts?.duration ?? DEFAULT_DURATION[kind];
-    setToasts((ts) => [...ts, { id, kind, title, message, duration }]);
+    setToasts((ts) => [...ts, { id, kind, title, message, duration, action: opts?.action }]);
     return id;
   }, []);
 
@@ -141,6 +151,16 @@ function ToastCard({ toast, onDismiss }: { toast: ToastItem; onDismiss: (id: num
           </div>
         )}
       </div>
+      {toast.action && (
+        <button
+          onClick={() => { toast.action?.onClick(); onDismiss(toast.id); }}
+          style={{
+            flexShrink: 0, alignSelf: "center", background: "transparent", color,
+            border: `1px solid ${color}66`, borderRadius: 7, padding: "4px 10px",
+            fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+          }}
+        >{toast.action.label}</button>
+      )}
       <button
         onClick={() => onDismiss(toast.id)}
         aria-label="Dismiss notification"

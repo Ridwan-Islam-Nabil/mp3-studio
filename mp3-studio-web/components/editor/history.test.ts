@@ -93,6 +93,16 @@ describe("histReducer", () => {
     expect(canRedo(s)).toBe(false);
   });
 
+  it("load makes a snapshot the new baseline (restored session: nothing to undo)", () => {
+    const s = run([{ type: "push", snap: A }, { type: "load", snap: AB }]);
+    expect(s).toEqual({ history: [AB], ptr: 0 });
+    expect(canUndo(s)).toBe(false);
+    expect(canRedo(s)).toBe(false);
+    // Clearing the restored cuts afterwards is undoable and brings them back.
+    const cleared = histReducer(s, { type: "reset" });
+    expect(current(histReducer(cleared, { type: "undo" }))).toEqual(AB);
+  });
+
   it("never mutates the previous state", () => {
     const before = run([{ type: "push", snap: A }, { type: "push", snap: AB }, { type: "undo" }]);
     const frozen = structuredClone(before);

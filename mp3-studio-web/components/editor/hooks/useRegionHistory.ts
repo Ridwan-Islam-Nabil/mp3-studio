@@ -10,7 +10,11 @@
  *
  * Restore guard: undo/redo re-create WaveSurfer regions, which fires `region-created`.
  * `isRestoringRef` is true while that happens and the `on*` handlers ignore events then,
- * so undo/redo never push new history entries.
+ * so undo/redo never push new history entries. Re-created regions keep their ids, so later
+ * region events (drag, double-click) still match their entry in `regions`.
+ *
+ * Also: `updateRegionTimes` (typed-in times in the region list — one history entry) and
+ * `loadRegions` (session auto-save restore — becomes the history baseline, no entry pushed).
  */
 
 import { useCallback, useReducer, useRef, useState, type RefObject } from "react";
@@ -41,12 +45,21 @@ export function useRegionHistory(pluginRef: RefObject<RegionsPlugin | null>) {
     plugin.getRegions().forEach((r) => r.remove());
     const restored: Region[] = snap.map((d) => ({
       ...d,
-      wsRef: plugin.addRegion({ start: d.start, end: d.end, color: cutColor(), drag: true, resize: true }),
+      wsRef: plugin.addRegion({ id: d.id, start: d.start, end: d.end, color: cutColor(), drag: true, resize: true }),
     }));
     isRestoringRef.current = false;
     regionsRef.current = restored;
     setRegions(restored);
   }, [pluginRef]);
+
+  /**
+   * Replaces all regions with `snap` and makes it the start of history (nothing to undo past
+   * it). Used to restore an auto-saved session.
+   */
+  const loadRegions = useCallback((snap: RegionData[]) => {
+    restoreSnapshot(snap);
+    dispatch({ type: "load", snap: toSnapshot(snap) });
+  }, [restoreSnapshot]);
 
   const undo = useCallback(() => {
     if (!canUndo(hist)) return;
@@ -79,6 +92,15 @@ export function useRegionHistory(pluginRef: RefObject<RegionsPlugin | null>) {
     commit(regionsRef.current.filter((r) => r.id !== id));
   }, [commit]);
 
+  /** Sets a region's start/end (already validated): moves the WaveSurfer region, one history entry. */
+  const updateRegionTimes = useCallback((id: string, start: number, end: number) => {
+    const region = regionsRef.current.find((r) => r.id === id);
+    if (!region || (region.start === start && region.end === end)) return;
+    // setOptions re-renders the region without emitting region-updated, so commit here.
+    region.wsRef.setOptions({ start, end });
+    commit(regionsRef.current.map((r) => (r.id === id ? { ...r, start, end } : r)));
+  }, [commit]);
+
   // ─── WaveSurfer region events (wired up by useWaveSurfer) ───────────────────
 
   const onRegionCreated = useCallback((region: WsRegion) => {
@@ -109,6 +131,8 @@ export function useRegionHistory(pluginRef: RefObject<RegionsPlugin | null>) {
     redo,
     reset,
     removeRegion,
+    updateRegionTimes,
+    loadRegions,
     onRegionCreated,
     onRegionUpdated,
     onRegionDoubleClicked,
