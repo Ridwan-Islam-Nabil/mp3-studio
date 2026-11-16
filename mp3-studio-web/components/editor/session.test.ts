@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  MAX_SESSIONS, SESSION_PREFIX, hashString, loadSession, pruneSessions, sanitizeCuts, saveSession,
+  MAX_SESSIONS, SESSION_PREFIX, hashString, loadSession, loadSessionEntry, pruneSessions, sanitizeCuts, saveSession,
   sessionKey, type StorageLike,
 } from "./session";
 
@@ -139,5 +139,23 @@ describe("sanitizeCuts", () => {
     expect(sanitizeCuts([{ start: 5, end: 6 }, { start: 1, end: 2 }])).toEqual([{ start: 1, end: 2 }, { start: 5, end: 6 }]);
     expect(sanitizeCuts({})).toEqual([]);
     expect(sanitizeCuts([{ start: Infinity, end: 2 }])).toEqual([]);
+  });
+});
+
+describe("keep mode sessions", () => {
+  it("stores mode \"keep\" and reads it back; cut sessions have no mode field", () => {
+    const storage = new FakeStorage();
+    const key = sessionKey(file);
+    expect(saveSession(storage, key, cuts, 1, "keep")).toBe(true);
+    expect(JSON.parse(storage.getItem(key)!).mode).toBe("keep");
+    expect(loadSessionEntry(storage, key)).toEqual({ cuts, mode: "keep" });
+    saveSession(storage, key, cuts, 2);
+    expect(JSON.parse(storage.getItem(key)!).mode).toBeUndefined();
+    expect(loadSessionEntry(storage, key)).toEqual({ cuts, mode: "cut" });
+    expect(loadSession(storage, key)).toEqual(cuts);
+  });
+  it("returns null for broken storage or no entry", () => {
+    expect(loadSessionEntry(broken, "x")).toBeNull();
+    expect(loadSessionEntry(new FakeStorage(), "x")).toBeNull();
   });
 });

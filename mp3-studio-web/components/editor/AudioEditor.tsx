@@ -18,13 +18,17 @@ import { trackFileUploaded } from "@/lib/analytics";
 import EditorSession from "./EditorSession";
 import { fileFormat, fileSizeMb } from "./editorUtils";
 import { ToastProvider } from "./toast/ToastProvider";
+import { useToolSettings } from "./hooks/useToolSettings";
 import { DropZone } from "./ui/DropZone";
+import { ToolLinkIntro } from "./ui/ToolBanners";
 import { EditorShell } from "./ui/EditorShell";
 
 interface Source { file: File; url: string }
 
 export default function AudioEditor() {
   const [source, setSource] = useState<Source | null>(null);
+  // Tools panel settings + `?tool=` link: per visit, so they survive a file change.
+  const tools = useToolSettings();
 
   const handleFile = useCallback((f: File) => {
     if (source) URL.revokeObjectURL(source.url);
@@ -40,8 +44,11 @@ export default function AudioEditor() {
     <ToastProvider>
       <EditorShell>
         {source
-          ? <EditorSession key={source.url} file={source.file} fileUrl={source.url} onReplaceFile={handleFile} />
-          : <DropZone onFile={handleFile} />}
+          ? <EditorSession key={source.url} file={source.file} fileUrl={source.url} onReplaceFile={handleFile} tools={tools} />
+          : <>
+              {tools.link && <ToolLinkIntro link={tools.link} />}
+              <DropZone onFile={handleFile} />
+            </>}
       </EditorShell>
     </ToastProvider>
   );

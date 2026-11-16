@@ -56,34 +56,52 @@ mp3-studio-web/
 │       ├── EditorSession.tsx ← one loaded file (keyed by its object URL): wires hooks → UI
 │       ├── hooks/
 │       │   ├── useWaveSurfer.ts     ← create/destroy WaveSurfer + plugins, playback events,
-│       │   │                           zoom calibration + slider, forwards region events
-│       │   ├── useRegionHistory.ts  ← regions state/ref, undo/redo/reset/remove, restore guard
+│       │   │                           zoom calibration + slider, forwards region events,
+│       │   │                           drag-selection color per mode
+│       │   ├── useRegionHistory.ts  ← regions state/ref, undo/redo/reset/remove, restore guard,
+│       │   │                           region mode (cut/keep) + switchMode, add/replaceRegions
 │       │   ├── usePlayback.ts       ← play/pause, skip, seek, speed, volume, mute
-│       │   ├── useFFmpegJob.ts      ← preview/export runner, progress, failures → toast + analytics
+│       │   ├── useFFmpegJob.ts      ← preview / export / detect silence / export one section,
+│       │   │                           progress, failures → toast + analytics
 │       │   ├── useRegionPlayback.ts ← ▶ play / ⟲ loop one region on the same WaveSurfer, `L`
 │       │   ├── useKeyboardShortcuts.ts ← one window keydown listener → shortcutFor() → handler
-│       │   └── useSessionAutosave.ts   ← restore/save this file's cuts in localStorage
+│       │   ├── useSessionAutosave.ts   ← restore/save this file's regions (+ mode) in localStorage
+│       │   ├── useToolSettings.ts   ← Tools panel settings for the visit: `?tool=` link + stored
+│       │   │                           prefs, silence options (used by AudioEditor)
+│       │   └── browserStorage.ts    ← getStorage(): localStorage or null (never throws)
 │       ├── ui/
 │       │   ├── EditorShell.tsx      ← background orbs, sticky top bar, content column
 │       │   ├── DropZone.tsx         ← empty-state drag-and-drop / browse
-│       │   ├── EditorToolbar.tsx    ← file name, "Save as", undo/redo/reset, change file
-│       │   ├── WaveformCard.tsx     ← header, minimap, timeline, waveform + hover cursor, fullscreen
+│       │   ├── EditorToolbar.tsx    ← file name, "Save as" (+ output extension), undo/redo/reset,
+│       │   │                           change file
+│       │   ├── WaveformCard.tsx     ← header (+ cut/keep mode badge), minimap, timeline, waveform +
+│       │   │                           hover cursor, fullscreen
 │       │   ├── ZoomBar.tsx          ← − / log slider / + / Fit / level badge
 │       │   ├── PlaybackBar.tsx      ← transport, seek, volume, speed (+ children at the end)
-│       │   ├── ActionButtons.tsx    ← Mark to Cut, Preview, Export (with progress fill)
-│       │   ├── RegionList.tsx       ← cut list (card, or `compact` inside fullscreen): ▶/⟲ per row,
-│       │   │                           click-to-type times, Delete on a focused row
+│       │   ├── ActionButtons.tsx    ← Mark to Cut / Mark to Keep, Preview, Export <FORMAT>
+│       │   ├── ToolsPanel.tsx       ← "Tools" card: mode, remove silence, normalize, format,
+│       │   │                           fades, ringtone (tiles carry `data-tool`)
+│       │   ├── ToolBanners.tsx      ← ToolLinkIntro (above the drop zone) + SilencePrompt
+│       │   ├── ModeSwitchDialog.tsx ← "Switch to Keep mode?" convert / relabel / cancel (portal)
+│       │   ├── RegionList.tsx       ← region list (card, or `compact` inside fullscreen): ▶/⟲ per
+│       │   │                           row, click-to-type times, Delete on a focused row, ⬇ export
+│       │   │                           this section (keep mode), "Kept parts" (cut mode)
 │       │   ├── ShortcutsOverlay.tsx ← "Keyboard shortcuts" dialog (`?` or ⌨ button; portal to <body>)
 │       │   └── PreviewModal.tsx     ← <audio> preview, rename, download (portal to <body>)
 │       ├── toast/ToastProvider.tsx  ← <ToastProvider> + useToast() (in-house, no dependency),
 │       │                               optional action button per toast
-│       ├── history.ts        ← pure undo/redo reducer (+ history.test.ts)
+│       ├── history.ts        ← pure undo/redo reducer, with the region mode per entry
+│       │                        (+ history.test.ts)
 │       ├── editorUtils.ts    ← pure helpers: fmt, zoom scale, file metadata, typed-time parse/
 │       │                        format/validate (+ editorUtils.test.ts)
 │       ├── shortcuts.ts      ← pure key → action mapping + overlay rows (+ shortcuts.test.ts)
 │       ├── session.ts        ← pure localStorage session helpers (+ session.test.ts)
-│       ├── theme.ts          ← `C` palette, button/badge/card style helpers, sliderBg, cutColor
-│       └── types.ts          ← RegionData, Region, WsRegion
+│       ├── toolParams.ts     ← pure `?tool=` parser, TOOL_IDS (+ toolParams.test.ts)
+│       ├── toolSettings.ts   ← pure Tools settings: storage, link overrides, ExportOptions,
+│       │                        keep-mode / silence / ringtone / section helpers (+ toolSettings.test.ts)
+│       ├── theme.ts          ← `C` palette, button/badge/card style helpers, sliderBg, cutColor,
+│       │                        KEEP_COLOR / regionColor, highlightRing
+│       └── types.ts          ← RegionData, Region, WsRegion, RegionMode
 ├── lib/
 │   ├── ffmpeg.ts             ← Audio engine entry point: FFmpeg.wasm runtime (loadFFmpeg, exportAudio,
 │   │                            trimAndExport, exportSegments, detectSilence) + re-exports of lib/audio/
@@ -440,7 +458,8 @@ a warm-up; loudness / true peak checked with native FFmpeg 8 `-af ebur128=peak=t
 
 The UI marks sections to **DELETE** (shown in red on the waveform).
 On export, `invertRegions()` (`lib/audio/regions.ts`, re-exported by `lib/ffmpeg.ts`) flips them
-to find what to **keep**. A future "keep mode" converts the other way with `keepToCuts()`.
+to find what to **keep**. In **keep mode** (Tools → Mode) the regions are the parts to keep
+(green) and `cutsForExport()` converts them with `keepToCuts()` before the same export path.
 
 Example:
 ```
@@ -483,10 +502,22 @@ and be removed from the list.
   history entry.
 - Play / loop one cut: ▶ per row plays just that region (pauses at its end, playhead left there),
   ⟲ loops it until clicked again or `L`. See "Region play / loop" below.
-- Session auto-save of the cuts per file (see "Auto-save" below)
-- Toast notifications (`toast/ToastProvider.tsx`): success after Export and after "Download MP3"
-  in the preview, errors when Preview/Export fail (out-of-memory gets the "try a shorter or
-  compressed file" wording), info when a session is restored. Auto-dismiss (5 s, errors 10 s),
+- Session auto-save of the regions (and the mode) per file (see "Auto-save" below)
+- **Tools panel** (`ui/ToolsPanel.tsx`, below the playback bar; all free, see "Tools" below):
+  Mode (cut / keep), Remove silence, Normalize loudness, Output format (MP3 / WAV / M4A +
+  Standard / High quality), Fade in / out, Ringtone (iPhone M4R / Android MP3). Settings apply to
+  Preview, Export and "Export this section"; the Export button, the "Save as" suffix and the
+  preview's Download button show the output format.
+- **Export this section**: one file for one part — ⬇ on a keep-region row (keep mode), or
+  "⬇ Export" on a row of "Kept parts" (cut mode: what remains between the cuts). Named
+  `<name>-NN.<ext>` by position. One file per click; there is deliberately no "export all" / ZIP
+  (reserved for a possible paid tier — do not add it to the free editor).
+- **Tool links** `?tool=…` pre-configure the editor (see "Tool links" below).
+- Toast notifications (`toast/ToastProvider.tsx`): success after Export and after "Download"
+  in the preview (with the normalize gain when normalize is on), errors when Preview/Export fail
+  (out-of-memory gets the "try a shorter or compressed file" wording), info when a session is
+  restored, "Added N cuts for silence" / mode switched (both with an Undo button), a warning
+  when an iPhone ringtone is longer than 40 s. Auto-dismiss (5 s, errors 10 s),
   pause on hover/focus, close button, optional `action` button (`{ label, onClick }` in the
   options; clicking runs it and dismisses); errors are `role="alert"`, others `role="status"`
   inside an `aria-live="polite"` viewport.
@@ -497,10 +528,79 @@ right-click region context menu.
 
 **Where new editor features go:** new shortcuts → a new `ShortcutAction` + key in
 `shortcuts.ts` (`shortcutFor` + `SHORTCUT_LIST`, with a test) and a `case` in `onShortcut` in
-`EditorSession.tsx`, calling the same callback the button uses; new FFmpeg actions (remove
-silence, normalize, split export, formats) → extend `useFFmpegJob` and reuse its `run()` /
-`reportFailure()`; new buttons → `ui/ActionButtons.tsx` (rendered as `PlaybackBar` children);
+`EditorSession.tsx`, calling the same callback the button uses; new FFmpeg actions → extend
+`useFFmpegJob` and reuse its `job()` / `run()` / `reportFailure()`; new export settings → a field
+in `ToolSettings` + `exportOptionsFor()` (`toolSettings.ts`, tested) + a tile in
+`ui/ToolsPanel.tsx`; new buttons → `ui/ActionButtons.tsx` (rendered as `PlaybackBar` children);
 per-region actions → a button in the `RegionList` row next to ▶/⟲.
+
+### Tools (Tools panel, keep mode, export one section)
+
+- **Settings** (`ToolSettings` in `toolSettings.ts`): `format` (mp3/wav/m4a), `quality`,
+  `normalize`, `fadeIn`/`fadeInSec`, `fadeOut`/`fadeOutSec`, `ringtone` (null / iphone / android).
+  Defaults = the old behaviour (MP3, standard, nothing else). They live in `useToolSettings`,
+  called by `AudioEditor` (so they survive a file change) and passed to `EditorSession` as
+  `tools`. `exportOptionsFor(settings)` → `ExportOptions` (WAV gets no quality; normalize = fast
+  two-pass; ringtone forces M4R/MP3 and at least `RINGTONE_FADE` = 0.5 s in / 1 s out).
+- **Persistence:** format, quality, normalize and the fades are stored in localStorage under
+  `mp3studio-web:tools` (`{ v: 1, … }`, try/catch, invalid values dropped). `update(patch)`
+  writes **only the keys in the patch**, merged into what is stored — so values a `?tool=` link
+  set (e.g. `format=wav`) apply to that visit but are never written unless the user changes them.
+  Ringtone mode is not stored; keep mode is stored per file with the regions (auto-save).
+- **Keep mode:** `RegionMode` (`"cut" | "keep"`, `types.ts`) is recorded **per history entry**
+  (`HistState.modes`, `history.ts`), so `useRegionHistory().mode` is derived from the reducer and
+  Undo/Redo restore the mode with the regions. Keep regions are green (`KEEP_COLOR`), cuts red;
+  drag-selection uses the mode's color (`useWaveSurfer` re-enables it when the mode changes) and
+  `onRegionCreated` recolors a drag-created region in keep mode. Visible everywhere: mode badge in
+  the waveform header, "✓ Mark to Keep", "Keep Regions" + "✓ KEEP MODE" in the list, hint text.
+  Switching with **no** regions changes the mode in place (`setMode`, nothing to undo). With
+  regions, `ModeSwitchDialog` asks: **Convert** (`regionsForModeSwitch(…, "convert")`: the
+  complement, so the result stays the same) or **Relabel** (same ranges, new meaning) — one
+  undoable step via `switchMode(to, ranges)`, plus an info toast with Undo. Esc / Cancel / backdrop
+  = no change. Export: `cutsForExport(regions, duration, mode)` (keep → `keepToCuts`). Nothing to
+  export (keep mode without regions) → an error toast before FFmpeg runs.
+- **Remove silence:** `detectSilence(file, { thresholdDb, minSilenceSec, duration })` (defaults
+  -40 dB / 0.7 s, sliders under "Advanced"; padding stays 0.15 s), then `applySilence()`: cut
+  mode adds the silences as cuts (skipping ones already inside a cut) with `addRegions` — **one**
+  history step; keep mode removes the silences from the keep regions (none yet = the whole file)
+  with `replaceRegions`. Toast with the count and Undo; "No silence found" suggests the Advanced
+  settings.
+- **Ringtone:** `ringtoneTooLong(settings, keptSec)` (iPhone and output > `IPHONE_RINGTONE_MAX_SEC`)
+  shows a warning in the tile and an info toast on Export; the file is exported anyway. Android
+  has no limit.
+- **Export this section:** `useFFmpegJob().exportSection(range, index, count, key)` →
+  `exportAudio(file, sectionCuts(range), …)` with the current settings, file name
+  `sectionFileName(name, index, count, format)` (same numbering as `exportSegments`). The
+  pressed button shows the progress; all other FFmpeg actions are disabled meanwhile.
+
+### Tool links (`?tool=`)
+
+A **contract with the SEO landing pages** (each feature page links to the editor). Parsing is in
+`toolParams.ts` (pure, `parseToolParams(search)`, unit-tested); `TOOL_IDS` is the list of valid
+ids. Read once on load (`useToolSettings`); nothing runs until the user loads a file.
+
+| Link | Effect |
+|---|---|
+| `/editor?tool=remove-silence` | "Remove silence" tile highlighted; after a file loads, a one-click **Detect silence** prompt above the waveform (never runs on its own) |
+| `/editor?tool=normalize` | Normalize loudness on |
+| `/editor?tool=ringtone` | Ringtone mode on, iPhone (M4R) |
+| `/editor?tool=ringtone&device=android` | Ringtone mode on, Android (MP3) |
+| `/editor?tool=convert` | Format tile highlighted |
+| `/editor?tool=convert&format=wav` (`m4a`, `mp3`) | … and that format preselected |
+| `/editor?tool=keep` | Keep mode on (the file's session starts in keep mode) |
+| `/editor?tool=split` | Section-export buttons ringed + a "Split" hint in the region list |
+| anything else / no `tool` | Today's default editor |
+
+- Values are case-insensitive and trimmed; parameters for other tools are ignored; only the
+  first `tool` counts; `format` accepts only `wav` / `m4a` / `mp3` (not `m4r`).
+- Before a file is loaded, `ToolLinkIntro` above the drop zone says what the link set up. The
+  linked tile gets a cyan ring (`highlightRing`, `data-highlighted` attribute).
+- A link's settings override the stored ones **for that visit only** (see Persistence above).
+- A restored auto-save session keeps its own mode (a cut-mode session restored on a
+  `?tool=keep` visit stays in cut mode — its regions mean cuts).
+- To add a tool: add the id to `TOOL_IDS`, handle it in `parseToolParams` / `settingsForLink` /
+  `ToolLinkIntro`, add tests, and tell the SEO session. Don't rename existing ids — live pages
+  link to them.
 
 ### Keyboard Shortcuts
 
@@ -510,7 +610,7 @@ actions in `onShortcut` in `EditorSession.tsx`. Same keys as the local app.
 | Key | Action |
 |---|---|
 | `Space` | Play / pause |
-| `N` | Drop a 10 s cut centered on the playhead (same as Mark to Cut) |
+| `N` | Drop a 10 s region centered on the playhead (same as Mark to Cut; a keep region in keep mode) |
 | `P` | Preview |
 | `F` | Toggle fullscreen waveform |
 | `L` | Stop a looping region |
@@ -519,7 +619,7 @@ actions in `onShortcut` in `EditorSession.tsx`. Same keys as the local app.
 | `Ctrl/⌘+Y`, `Ctrl/⌘+Shift+Z` | Redo |
 | `Delete` / `Backspace` | Remove the focused row in the cut list (handled by the row) |
 | `?` | Open / close the shortcuts overlay |
-| `Esc` | Close the overlay → else the preview modal → else exit fullscreen |
+| `Esc` | Close the mode-switch dialog → else the overlay → else the preview modal → else exit fullscreen |
 
 Rules (keep them when adding keys): nothing fires while focus is in a text input, textarea,
 select or contenteditable (except Esc; a field that handles Esc itself calls `preventDefault` /
@@ -544,7 +644,9 @@ clicking ▶ on a looping region switches it to a single play, ⟲ on a playing 
 ### Auto-save
 `useSessionAutosave` + `session.ts`. Cuts are stored in `localStorage` under
 `mp3studio-web:session:<FNV-1a hash of name|size|lastModified>` as
-`{ v: 1, cuts: [{ start, end }], savedAt }` on every region change; no cuts → the entry is
+`{ v: 1, cuts: [{ start, end }], savedAt, mode?: "keep" }` on every region change (`mode` only in
+keep mode — then `cuts` holds keep regions; `loadSessionEntry()` returns `{ cuts, mode }` and
+restore re-creates them in that mode, toast "Restored N keep regions"); no regions → the entry is
 removed. Only the 20 most recently saved files are kept (`MAX_SESSIONS`; on a quota error it
 prunes to 10 and retries once). Every storage call is in try/catch (private mode, blocked
 storage, quota) — failures just mean nothing is remembered.
@@ -578,15 +680,20 @@ There is no global state manager. State is split by lifetime:
 
 ```
 AudioEditor                 source { file, url }  → the File and its object URL
-EditorSession (key = url)   outputName, zoomSlider, fullscreen, showShortcuts
+  useToolSettings           link (`?tool=`), settings (ToolSettings), silence options — per
+                            visit, passed to EditorSession as `tools`
+EditorSession (key = url)   outputName, zoomSlider, fullscreen, showShortcuts,
+                            pendingMode (mode-switch dialog), silencePrompt
   useRegionHistory          regions[] { id, start, end, wsRef } — source of truth for export
-                            hist (useReducer, history.ts) → { history: RegionData[][], ptr }
+                            hist (useReducer, history.ts) → { history: RegionData[][], ptr,
+                            modes } → `mode` (cut / keep) is derived from it
   useWaveSurfer             duration, currentTime, isPlaying, zoomMin
   usePlayback               speed, volume, muted
   useRegionPlayback         active { id, loop } | null (+ activeRef for the timeupdate listener)
   useSessionAutosave        (no state — a ref that gates saving until the restore check ran)
   useFFmpegJob              exporting / exportProgress / exportDone,
-                            previewing / previewProgress / previewUrl / showPreview
+                            previewing / previewProgress / previewUrl / showPreview / previewFormat,
+                            detecting / detectProgress, sectionKey / sectionProgress
 WaveformCard                cursorTime (hover readout)
 DropZone                    dragging (highlight)
 ToastProvider               toasts[]
@@ -624,12 +731,20 @@ double-clicking a region after an undo no longer matched its entry in `regions`.
   Host defaults to `https://us.i.posthog.com` (override with `NEXT_PUBLIC_POSTHOG_HOST`).
 - All `track*()` helpers swallow errors, so calling them before init is safe.
 - Events: `file_uploaded`, `region_created`, `preview_opened`, `export_completed`,
-  `export_failed`, `undo_used`, `redo_used`, `user_feedback`.
-- `export_failed` (`trackExportFailed`) fires from the catch blocks of `handleExport` /
-  `handlePreview` in `components/editor/hooks/useFFmpegJob.ts` (via `reportFailure`) with `{ stage: "load" | "export" | "preview", format,
-  sizeMB, durationSec, cutCount, message }`. `stage` is `"load"` when the error is an
-  `FFmpegLoadError`; `message` is truncated to 200 chars. Use it to see how often large files
-  exhaust WebAssembly memory (filter on `format` / `sizeMB` / message text).
+  `export_failed`, `undo_used`, `redo_used`, `user_feedback`, `tool_used`, `tool_link_opened`.
+- `export_completed` (`trackExportCompleted`): `{ cutCount, durationSec, outputDurationSec,
+  format (output), normalize, mode, fade, ringtone, kind: "full" | "section" }`.
+- `export_failed` (`trackExportFailed`) fires from `reportFailure` in
+  `components/editor/hooks/useFFmpegJob.ts` (Preview, Export, Detect silence, Export this section)
+  with `{ stage: "load" | "export" | "preview" | "silence" | "section", format (source extension),
+  sizeMB, durationSec, cutCount, message, outputFormat, normalize, mode }`. `stage` is `"load"`
+  when the error is an `FFmpegLoadError`; `message` is truncated to 200 chars. Use it to see how
+  often large files exhaust WebAssembly memory (filter on `format` / `sizeMB` / message text).
+- `tool_used` (`trackToolUsed`, typed union `ToolUsedEvent`): `remove-silence` (count +
+  threshold/min length + mode), `normalize` (on/off), `convert` (format + quality), `fade`,
+  `ringtone` (device or null), `keep` (mode + `conversion`: none / convert / relabel), `split`
+  (a section was exported). `tool_link_opened`: `{ tool, device?, format? }` once per visit with a
+  valid `?tool=`. Settings and counts only — **no file names, no personal data**.
 - **Feedback widget** sends its thumbs up/down, message and optional email as a `user_feedback`
   PostHog event. There is no other feedback backend — if PostHog is not configured, feedback goes
   nowhere.
@@ -740,10 +855,16 @@ The COOP/COEP headers from `next.config.ts` apply in development too (unless bui
   `components/editor/history.test.ts` (undo/redo reducer: push drops the redo branch, undo/redo
   at the ends are no-ops, reset, clear, load, immutability), `components/editor/editorUtils.test.ts`
   (time format, zoom scale, file metadata, typed-time parse/format/validate),
-  `components/editor/shortcuts.test.ts` (key mapping, text-field/slider/modifier rules) and
+  `components/editor/shortcuts.test.ts` (key mapping, text-field/slider/modifier rules),
   `components/editor/session.test.ts` (key, save/load, clamping, pruning to 20, quota, throwing
-  storage — with an in-memory fake). Vitest runs in Node, so keep `history.ts`, `editorUtils.ts`,
-  `shortcuts.ts` and `session.ts` free of React and DOM globals. Config: `vitest.config.ts`. Known bugs are written as `it.fails(...)`: when you fix one, Vitest
+  storage, keep-mode entries — with an in-memory fake), `components/editor/toolParams.test.ts`
+  (the `?tool=` contract: every id, device/format rules, unknown values, round trip) and
+  `components/editor/toolSettings.test.ts` (defaults = old behaviour, persistence merges only
+  changed keys, link overrides, ExportOptions per format/ringtone/fades, keep-mode conversion,
+  applySilence, ringtone limit, section names). History tests also cover the per-entry mode.
+  Vitest runs in Node, so keep `history.ts`, `editorUtils.ts`, `shortcuts.ts`, `session.ts`,
+  `toolParams.ts` and `toolSettings.ts` free of React and DOM globals (`toolSettings.ts` imports
+  only the pure `lib/audio/*` modules, not `lib/ffmpeg.ts`). Config: `vitest.config.ts`. Known bugs are written as `it.fails(...)`: when you fix one, Vitest
   reports that test as failing — change it to `it(...)`.
 - **E2E smoke (Playwright)** — `e2e/editor-smoke.spec.ts`, two tests, each in Chromium, Firefox
   and WebKit (`playwright.config.ts` projects): opens `/editor`, uploads
@@ -760,13 +881,27 @@ The COOP/COEP headers from `next.config.ts` apply in development too (unless bui
   overlay button, and reload + same file restores the cuts (toast, Clear, Ctrl+Z). No FFmpeg
   needed, so it runs in seconds. To run against another port than 3000:
   `E2E_PORT=3211 npx playwright test`.
+- **E2E tools (Playwright)** — `e2e/editor-tools.spec.ts` with `e2e/fixtures/tone-silence-8s.mp3`
+  (8 s mono 440 Hz tone, silence at 1.5–3.0 s and 5.0–6.5 s, 64 KB; made with
+  `ffmpeg -f lavfi -i "aevalsrc='0.5*sin(2*PI*440*t)*(lt(t,1.5)+between(t,3,5)+gte(t,6.5))':s=44100:d=8" -ac 1 -b:a 64k`):
+  Detect silence adds 2 cuts in one undo step; WAV export downloads `.wav` of the right length;
+  ringtone link downloads `.m4r` (`ftyp`); keep-mode export and "Export this section" are as long
+  as the kept region; the mode-switch dialog (Esc cancels, Convert, Ctrl+Z switches back); every
+  `?tool=` link (+ an unknown one). Formats and lengths are read from the downloaded bytes (WAV
+  header / `ftyp`), so no native FFmpeg is needed. ~25 s in Chromium.
 - Test files are excluded from `tsconfig.json` so `next build` never type-checks them;
   `tsconfig.test.json` covers them instead (`npm run typecheck`).
 - The waveform wrapper in `ui/WaveformCard.tsx` carries `data-testid="waveform"` — keep it when
   refactoring, the smoke test drags on it. Other editor test ids: `drop-zone`, `editor-toolbar`,
   `waveform-card`, `playback-bar`, `region-list`, `region-list-compact`, `preview-modal`,
-  `shortcuts-overlay`, `toast-viewport`, `toast-success` / `toast-error` / `toast-info`. Region rows
-  carry a `data-region-row` attribute.
+  `shortcuts-overlay`, `toast-viewport`, `toast-success` / `toast-error` / `toast-info`,
+  `tools-panel`, `tool-link-intro`, `silence-prompt`, `mode-badge` (`data-mode`),
+  `mode-switch-dialog`, `kept-parts`, `split-hint`, `output-extension`, `ringtone-warning`,
+  `ringtone-length`. Region rows carry a `data-region-row` attribute, kept-part rows
+  `data-kept-part`, Tools tiles `data-tool="<id>"` (+ `data-highlighted` for a linked tool).
+  Region-row button names depend on the mode ("Play cut …" / "Play keep region …"); the section
+  export buttons are "Export this section <m:ss.d> to <m:ss.d>". Kept-part times use an en dash
+  (`0:00.0 – 0:10.1`), so they never match the `→` regex above.
 - The cut list renders start and end as two buttons inside one `<span>` whose text is exactly
   `m:ss.d → m:ss.d` — the smoke test matches that span with an anchored regex, so don't add other
   text inside it.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  canRedo, canUndo, histReducer, initialHistory, toSnapshot, type HistAction, type HistState,
+  canRedo, canUndo, currentMode, histReducer, historyWithMode, initialHistory, toSnapshot,
+  type HistAction, type HistState,
 } from "./history";
 import type { RegionData } from "./types";
 
@@ -15,7 +16,7 @@ const current = (s: HistState) => s.history[s.ptr];
 
 describe("histReducer", () => {
   it("starts with one empty snapshot and nothing to undo or redo", () => {
-    expect(initialHistory).toEqual({ history: [[]], ptr: 0 });
+    expect(initialHistory).toEqual({ history: [[]], ptr: 0, modes: ["cut"] });
     expect(canUndo(initialHistory)).toBe(false);
     expect(canRedo(initialHistory)).toBe(false);
   });
@@ -88,14 +89,14 @@ describe("histReducer", () => {
 
   it("clear forgets all history", () => {
     const s = run([{ type: "push", snap: A }, { type: "push", snap: AB }, { type: "undo" }, { type: "clear" }]);
-    expect(s).toEqual({ history: [[]], ptr: 0 });
+    expect(s).toEqual({ history: [[]], ptr: 0, modes: ["cut"] });
     expect(canUndo(s)).toBe(false);
     expect(canRedo(s)).toBe(false);
   });
 
   it("load makes a snapshot the new baseline (restored session: nothing to undo)", () => {
     const s = run([{ type: "push", snap: A }, { type: "load", snap: AB }]);
-    expect(s).toEqual({ history: [AB], ptr: 0 });
+    expect(s).toEqual({ history: [AB], ptr: 0, modes: ["cut"] });
     expect(canUndo(s)).toBe(false);
     expect(canRedo(s)).toBe(false);
     // Clearing the restored cuts afterwards is undoable and brings them back.
@@ -128,5 +129,40 @@ describe("toSnapshot", () => {
   it("keeps only id, start and end", () => {
     const withExtra = [{ id: "a", start: 1, end: 2, wsRef: { remove() {} } }] as unknown as RegionData[];
     expect(toSnapshot(withExtra)).toEqual([{ id: "a", start: 1, end: 2 }]);
+  });
+});
+
+describe("region mode (keep mode) in history", () => {
+  it("starts in the given mode and push keeps the current mode by default", () => {
+    expect(currentMode(initialHistory)).toBe("cut");
+    const s = run([{ type: "push", snap: A }], historyWithMode("keep"));
+    expect(currentMode(s)).toBe("keep");
+    expect(s.modes).toEqual(["keep", "keep"]);
+  });
+
+  it("undoing a push that switched the mode switches it back; redo switches again", () => {
+    const s = run([{ type: "push", snap: A }, { type: "push", snap: AB, mode: "keep" }]);
+    expect(currentMode(s)).toBe("keep");
+    const undone = histReducer(s, { type: "undo" });
+    expect(currentMode(undone)).toBe("cut");
+    expect(current(undone)).toEqual(A);
+    expect(currentMode(histReducer(undone, { type: "redo" }))).toBe("keep");
+  });
+
+  it("setMode changes only the current entry, without a new history step", () => {
+    const s = run([{ type: "push", snap: A }, { type: "reset" }, { type: "setMode", mode: "keep" }]);
+    expect(s.history).toEqual([[], A, []]);
+    expect(s.modes).toEqual(["cut", "cut", "keep"]);
+    expect(currentMode(histReducer(s, { type: "undo" }))).toBe("cut");
+    expect(histReducer(s, { type: "setMode", mode: "keep" })).toBe(s);
+  });
+
+  it("a new push drops the redo branch's modes too; reset and load keep or set the mode", () => {
+    let s = run([{ type: "push", snap: A, mode: "keep" }, { type: "undo" }, { type: "push", snap: AB }]);
+    expect(s.modes).toEqual(["cut", "cut"]);
+    s = histReducer(historyWithMode("keep"), { type: "reset" });
+    expect(s.modes).toEqual(["keep", "keep"]);
+    expect(histReducer(initialHistory, { type: "load", snap: A, mode: "keep" }).modes).toEqual(["keep"]);
+    expect(histReducer(historyWithMode("keep"), { type: "load", snap: A }).modes).toEqual(["keep"]);
   });
 });

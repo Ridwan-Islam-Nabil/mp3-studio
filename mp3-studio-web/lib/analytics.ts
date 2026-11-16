@@ -51,29 +51,74 @@ export function trackFileUploaded(props: {
   track("file_uploaded", props);
 }
 
-/** User clicked Export MP3 and it completed */
+/** Output format of an export ("mp3" | "wav" | "m4a" | "m4r"). */
+export type AnalyticsOutputFormat = "mp3" | "wav" | "m4a" | "m4r";
+
+/** "cut" = regions are removed (default), "keep" = only the regions are kept (keep mode). */
+export type AnalyticsRegionMode = "cut" | "keep";
+
+/** User clicked Export (or "Export this section") and it completed */
 export function trackExportCompleted(props: {
-  cutCount:        number;  // number of cut regions
+  cutCount:        number;  // number of regions (cut or keep, see `mode`)
   durationSec:     number;  // source audio length
   outputDurationSec: number;
+  format?:    AnalyticsOutputFormat;  // output format
+  normalize?: boolean;
+  mode?:      AnalyticsRegionMode;
+  fade?:      boolean;                // any fade in/out applied (incl. ringtone fades)
+  ringtone?:  "iphone" | "android" | null;
+  kind?:      "full" | "section";     // whole edit, or one section via "Export this section"
 }) {
   track("export_completed", props);
 }
 
 /**
- * Loading FFmpeg, exporting, or generating a preview threw.
- * `stage` is "load" when the FFmpeg core never finished loading.
+ * Loading FFmpeg, exporting, generating a preview, detecting silence or exporting one section
+ * threw. `stage` is "load" when the FFmpeg core never finished loading.
  * `message` is truncated to 200 chars so stack-like errors don't bloat events.
  */
 export function trackExportFailed(props: {
-  stage:       "load" | "export" | "preview";
+  stage:       "load" | "export" | "preview" | "silence" | "section";
   format:      string;  // source file extension, "mp3", "wav", …
   sizeMB:      number;
   durationSec: number;
   cutCount:    number;
   message:     string;
+  outputFormat?: AnalyticsOutputFormat;
+  normalize?:    boolean;
+  mode?:         AnalyticsRegionMode;
 }) {
   track("export_failed", { ...props, message: props.message.slice(0, 200) });
+}
+
+// ─── Tools (wave 4) ───────────────────────────────────────────────────────────
+
+/**
+ * One use of an editor tool. Only settings and counts — never file names or audio content.
+ *   remove-silence  "Detect silence" finished (`cutsAdded` = regions added/changed)
+ *   normalize       toggle changed
+ *   convert         output format / quality changed
+ *   fade            fade in / out toggled
+ *   ringtone        ringtone mode turned on/off or device changed
+ *   keep            keep mode switched (`conversion` = how existing regions were handled)
+ *   split           "Export this section" used
+ */
+export type ToolUsedEvent =
+  | { tool: "remove-silence"; cutsAdded: number; thresholdDb: number; minSilenceSec: number; mode: AnalyticsRegionMode }
+  | { tool: "normalize"; enabled: boolean }
+  | { tool: "convert"; format: AnalyticsOutputFormat; quality: "standard" | "high" }
+  | { tool: "fade"; fadeIn: boolean; fadeOut: boolean }
+  | { tool: "ringtone"; device: "iphone" | "android" | null }
+  | { tool: "keep"; mode: AnalyticsRegionMode; conversion: "none" | "convert" | "relabel" }
+  | { tool: "split"; format: AnalyticsOutputFormat; mode: AnalyticsRegionMode };
+
+export function trackToolUsed(props: ToolUsedEvent) {
+  track("tool_used", props);
+}
+
+/** The editor was opened from a shareable tool link (`/editor?tool=…`). */
+export function trackToolLinkOpened(props: { tool: string; device?: string; format?: string }) {
+  track("tool_link_opened", props);
 }
 
 /** User opened the Preview modal */

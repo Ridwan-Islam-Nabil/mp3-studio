@@ -84,7 +84,7 @@ export function shortcutFor(e: KeyInput): ShortcutAction | null {
 /** Rows of the shortcuts overlay. `sep` joins the keys: "+" = together (default), "/" = either. */
 export const SHORTCUT_LIST: { keys: string[]; sep?: "+" | "/"; label: string }[] = [
   { keys: ["Space"], label: "Play / pause" },
-  { keys: ["N"], label: "Drop a 10 s cut centered on the playhead" },
+  { keys: ["N"], label: "Drop a 10 s cut (keep region in Keep mode) centered on the playhead" },
   { keys: ["P"], label: "Preview the result" },
   { keys: ["F"], label: "Toggle fullscreen waveform" },
   { keys: ["L"], label: "Stop looping a cut" },

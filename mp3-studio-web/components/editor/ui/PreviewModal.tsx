@@ -17,9 +17,13 @@ interface Props {
   onOutputNameChange: (name: string) => void;
   onClose: () => void;
   onDownload: () => void;
+  /** Extension of the rendered preview ("mp3", "wav", "m4a", "m4r"). */
+  extension?: string;
+  /** "keep" changes the summary line to keep regions. */
+  mode?: "cut" | "keep";
 }
 
-export function PreviewModal({ url, cutCount, outputName, onOutputNameChange, onClose, onDownload }: Props) {
+export function PreviewModal({ url, cutCount, outputName, onOutputNameChange, onClose, onDownload, extension = "mp3", mode = "cut" }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const stopAudio = () => {
@@ -55,15 +59,17 @@ export function PreviewModal({ url, cutCount, outputName, onOutputNameChange, on
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
           <label style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>Save as:</label>
           <input value={outputName} onChange={(e) => onOutputNameChange(e.target.value)} style={textInput()} />
-          <span style={{ fontSize: 12, color: C.dim }}>.mp3</span>
+          <span style={{ fontSize: 12, color: C.dim }}>.{extension}</span>
         </div>
         <audio ref={audioRef} src={url} controls autoPlay style={{ width: "100%", marginBottom: 14, borderRadius: 8 }} />
         <p style={{ fontSize: 12, color: C.dim, marginBottom: 20, lineHeight: 1.6 }}>
-          {cutCount === 0 ? "No cuts — full audio." : `${cutCount} cut${cutCount > 1 ? "s" : ""} removed.`} Listen, then download.
+          {mode === "keep"
+            ? `${cutCount} keep region${cutCount === 1 ? "" : "s"} saved, everything else removed.`
+            : cutCount === 0 ? "No cuts — full audio." : `${cutCount} cut${cutCount > 1 ? "s" : ""} removed.`} Listen, then download.
         </p>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button onClick={close} style={ghostBtn()}>Continue Editing</button>
-          <button onClick={download} style={{ ...primaryBtn(), padding: "9px 20px" }}>⬇ Download MP3</button>
+          <button onClick={download} style={{ ...primaryBtn(), padding: "9px 20px" }}>⬇ Download {extension.toUpperCase()}</button>
         </div>
       </div>
     </div>,

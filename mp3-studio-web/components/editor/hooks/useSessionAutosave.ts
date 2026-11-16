@@ -10,32 +10,27 @@
  * - Saving starts only after that restore check, so the empty region list of a freshly mounted
  *   session never overwrites the stored cuts. Clearing all cuts deletes the entry.
  * - All storage access goes through session.ts, which swallows storage errors.
+ * - Keep mode: the mode is stored with the ranges (`mode: "keep"`) and restored with them, so
+ *   keep regions never come back as cuts.
  */
 
 import { useEffect, useRef } from "react";
 import { toSnapshot } from "../history";
-import { loadSession, saveSession, sessionKey, type StorageLike } from "../session";
+import { loadSessionEntry, saveSession, sessionKey } from "../session";
 import { useToast } from "../toast/ToastProvider";
-import type { Region, RegionData } from "../types";
+import { getStorage } from "./browserStorage";
+import type { Region, RegionData, RegionMode } from "../types";
 
 interface Options {
   file: File;
   duration: number;
   regions: Region[];
-  loadRegions: (snap: RegionData[]) => void;
+  mode: RegionMode;
+  loadRegions: (snap: RegionData[], mode: RegionMode) => void;
   clearRegions: () => void;
 }
 
-/** localStorage, or null where accessing it throws (sandboxed iframes, blocked site data). */
-function getStorage(): StorageLike | null {
-  try {
-    return typeof window === "undefined" ? null : window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-export function useSessionAutosave({ file, duration, regions, loadRegions, clearRegions }: Options) {
+export function useSessionAutosave({ file, duration, regions, mode, loadRegions, clearRegions }: Options) {
   const toast = useToast();
   const key = sessionKey(file);
   const checkedRef = useRef(false); // restore attempted → saving allowed
@@ -44,11 +39,13 @@ export function useSessionAutosave({ file, duration, regions, loadRegions, clear
   useEffect(() => {
     if (duration <= 0 || checkedRef.current) return;
     checkedRef.current = true;
-    const cuts = loadSession(getStorage(), key, duration);
-    if (!cuts) return;
-    loadRegions(cuts.map((c, i) => ({ id: `restored-${i}`, start: c.start, end: c.end })));
+    const entry = loadSessionEntry(getStorage(), key, duration);
+    if (!entry) return;
+    const { cuts } = entry;
+    loadRegions(cuts.map((c, i) => ({ id: `restored-${i}`, start: c.start, end: c.end })), entry.mode);
     const n = cuts.length;
-    toast.show("info", `Restored ${n} cut${n === 1 ? "" : "s"} from your last session`, undefined, {
+    const what = entry.mode === "keep" ? `keep region${n === 1 ? "" : "s"}` : `cut${n === 1 ? "" : "s"}`;
+    toast.show("info", `Restored ${n} ${what} from your last session`, undefined, {
       duration: 8000,
       action: { label: "Clear", onClick: clearRegions },
     });
@@ -57,6 +54,6 @@ export function useSessionAutosave({ file, duration, regions, loadRegions, clear
   // Save on every change after the restore check.
   useEffect(() => {
     if (!checkedRef.current) return;
-    saveSession(getStorage(), key, toSnapshot(regions));
-  }, [regions, key]);
+    saveSession(getStorage(), key, toSnapshot(regions), Date.now(), mode);
+  }, [regions, mode, key]);
 }

@@ -1,8 +1,17 @@
 /** Buttons at the end of the playback bar: Mark to Cut, Preview, Export (with progress fill). */
 
-import { C, ghostBtn, primaryBtn } from "../theme";
+import { C, ghostBtn, keepText, primaryBtn } from "../theme";
+import type { RegionMode } from "../types";
 
-export function MarkToCutButton({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
+export function MarkToCutButton({ onClick, disabled, mode = "cut" }: { onClick: () => void; disabled: boolean; mode?: RegionMode }) {
+  if (mode === "keep") {
+    return (
+      <button onClick={onClick} disabled={disabled} title="Drop a 10 s keep region centered on the playhead (N)"
+        style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.45)", color: keepText, borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+        ✓ Mark to Keep
+      </button>
+    );
+  }
   return (
     <button onClick={onClick} disabled={disabled} title="Drop a 10 s cut centered on the playhead (N)"
       style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.4)", color: C.cutText, borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
@@ -28,14 +37,18 @@ export function PreviewButton({ onClick, disabled, running, progress }: PreviewP
   );
 }
 
-interface ExportProps extends PreviewProps { done: boolean }
+interface ExportProps extends PreviewProps {
+  done: boolean;
+  /** Extension of the output, shown in the label ("mp3" → "⬇ Export MP3"). */
+  extension?: string;
+}
 
-export function ExportButton({ onClick, disabled, running, progress, done }: ExportProps) {
+export function ExportButton({ onClick, disabled, running, progress, done, extension = "mp3" }: ExportProps) {
   return (
     <button onClick={onClick} disabled={disabled} style={primaryBtn({ minWidth: 140 })}>
       {running && <ProgressFill pct={progress} color="rgba(255,255,255,0.15)" />}
       <span style={{ position: "relative" }}>
-        {running ? `Exporting… ${progress}%` : done ? "✓ Exported!" : "⬇ Export MP3"}
+        {running ? `Exporting… ${progress}%` : done ? "✓ Exported!" : `⬇ Export ${extension.toUpperCase()}`}
       </span>
     </button>
   );

@@ -37,6 +37,17 @@ const CUT_COLORS = [
 ];
 export const cutColor = () => CUT_COLORS[Math.floor(Math.random() * CUT_COLORS.length)];
 
+/** Translucent green for a keep region (keep mode) — never red, so the two modes can't be confused. */
+export const KEEP_COLOR = "rgba(16,185,129,0.3)";
+export const keepText = "#6ee7b7";
+
+/** Region fill for the current mode. */
+export const regionColor = (mode: "cut" | "keep") => (mode === "keep" ? KEEP_COLOR : cutColor());
+
+/** Cyan ring for the tool a `?tool=` link points at. */
+export const highlightRing = (on: boolean): CSSProperties =>
+  on ? { borderColor: C.accent, boxShadow: "0 0 0 1px rgba(6,182,212,0.6), 0 0 18px rgba(6,182,212,0.25)" } : {};
+
 // ─── Buttons ─────────────────────────────────────────────────────────────────
 
 export const ghostBtn = (extra?: CSSProperties): CSSProperties => ({

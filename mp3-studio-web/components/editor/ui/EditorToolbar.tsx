@@ -14,10 +14,13 @@ interface Props {
   onRedo: () => void;
   onReset: () => void;
   onReplaceFile: (f: File) => void;
+  /** Extension of the output format, shown after the name ("mp3", "wav", …). */
+  extension?: string;
 }
 
 export function EditorToolbar({
   fileName, outputName, onOutputNameChange, canUndo, canRedo, onUndo, onRedo, onReset, onReplaceFile,
+  extension = "mp3",
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const disabledStyle = (enabled: boolean) =>
@@ -30,7 +33,7 @@ export function EditorToolbar({
         <label style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>Save as:</label>
         <input value={outputName} onChange={(e) => onOutputNameChange(e.target.value)}
           style={textInput({ minWidth: 0 })} />
-        <span style={{ fontSize: 12, color: C.dim }}>.mp3</span>
+        <span data-testid="output-extension" style={{ fontSize: 12, color: C.dim }}>.{extension}</span>
       </div>
 
       <button onClick={onUndo} disabled={!canUndo} title="Undo" style={disabledStyle(canUndo)}>↩ Undo</button>

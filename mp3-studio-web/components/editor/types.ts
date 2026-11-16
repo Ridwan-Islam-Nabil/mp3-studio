@@ -14,3 +14,9 @@ export interface RegionData {
 export interface Region extends RegionData {
   wsRef: WsRegion;
 }
+
+/**
+ * What the regions mean. "cut" (default): regions are deleted, everything else is kept.
+ * "keep": only the regions are kept (converted with keepToCuts() at export time).
+ */
+export type RegionMode = "cut" | "keep";

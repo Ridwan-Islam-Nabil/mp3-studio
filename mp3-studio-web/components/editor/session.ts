@@ -4,7 +4,9 @@
  * this is unit-tested in Node with a fake (session.test.ts). Used by hooks/useSessionAutosave.ts.
  *
  *   key    mp3studio-web:session:<hash of name|size|lastModified>
- *   value  { v: 1, cuts: [{ start, end }, …], savedAt: <ms since epoch> }
+ *   value  { v: 1, cuts: [{ start, end }, …], savedAt: <ms since epoch>, mode?: "keep" }
+ *
+ * `mode: "keep"` means the stored ranges are keep regions (keep mode); without it they are cuts.
  *
  * Only the MAX_SESSIONS most recently saved files are kept. Every storage call is wrapped in
  * try/catch: localStorage can be missing, throw on access (private mode, blocked site data) or
@@ -25,7 +27,13 @@ export interface StorageLike {
 
 export interface StoredCut { start: number; end: number }
 
-interface StoredSession { v: 1; cuts: StoredCut[]; savedAt: number }
+/** What the stored ranges mean (same as RegionMode in types.ts). */
+export type StoredMode = "cut" | "keep";
+
+interface StoredSession { v: 1; cuts: StoredCut[]; savedAt: number; mode?: "keep" }
+
+/** A restored session: the ranges and what they mean. */
+export interface LoadedSession { cuts: StoredCut[]; mode: StoredMode }
 
 /** 32-bit FNV-1a hash as 8 hex chars. Not cryptographic — just a short, stable key. */
 export function hashString(s: string): string {
@@ -59,18 +67,23 @@ export function sanitizeCuts(raw: unknown, duration?: number): StoredCut[] {
   return cuts.sort((a, b) => a.start - b.start);
 }
 
-/** Reads the saved cuts for `key`, or null if there are none (or storage is unusable). */
-export function loadSession(storage: StorageLike | null, key: string, duration?: number): StoredCut[] | null {
+/** Reads the saved ranges and mode for `key`, or null if there are none (or storage is unusable). */
+export function loadSessionEntry(storage: StorageLike | null, key: string, duration?: number): LoadedSession | null {
   if (!storage) return null;
   try {
     const raw = storage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredSession> | null;
     const cuts = sanitizeCuts(parsed?.cuts, duration);
-    return cuts.length > 0 ? cuts : null;
+    return cuts.length > 0 ? { cuts, mode: parsed?.mode === "keep" ? "keep" : "cut" } : null;
   } catch {
     return null;
   }
+}
+
+/** Reads the saved ranges for `key` (see loadSessionEntry for the mode), or null. */
+export function loadSession(storage: StorageLike | null, key: string, duration?: number): StoredCut[] | null {
+  return loadSessionEntry(storage, key, duration)?.cuts ?? null;
 }
 
 /** Removes the oldest saved sessions so at most `max` remain. */
@@ -94,16 +107,18 @@ export function pruneSessions(storage: StorageLike, max = MAX_SESSIONS): void {
 
 /**
  * Saves `cuts` under `key` (removes the entry when there are no cuts) and prunes old sessions.
- * On a quota error it prunes to half the cap and retries once. Returns true if stored.
+ * `mode` "keep" marks them as keep regions. On a quota error it prunes to half the cap and
+ * retries once. Returns true if stored.
  */
 export function saveSession(
-  storage: StorageLike | null, key: string, cuts: StoredCut[], now = Date.now(),
+  storage: StorageLike | null, key: string, cuts: StoredCut[], now = Date.now(), mode: StoredMode = "cut",
 ): boolean {
   if (!storage) return false;
   try {
     if (cuts.length === 0) { storage.removeItem(key); return true; }
     const value = JSON.stringify({
       v: 1, savedAt: now, cuts: cuts.map(({ start, end }) => ({ start, end })),
+      ...(mode === "keep" ? { mode } : {}),
     } satisfies StoredSession);
     try {
       storage.setItem(key, value);

@@ -16,8 +16,8 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.js";
 import MinimapPlugin from "wavesurfer.js/dist/plugins/minimap.js";
 import { calibrateZoomMin, sliderToZoom } from "../editorUtils";
-import { C, cutColor } from "../theme";
-import type { WsRegion } from "../types";
+import { C, regionColor } from "../theme";
+import type { RegionMode, WsRegion } from "../types";
 
 export interface UseWaveSurferOptions {
   fileUrl: string;
@@ -27,10 +27,12 @@ export interface UseWaveSurferOptions {
   onRegionCreated: (region: WsRegion) => void;
   onRegionUpdated: (region: WsRegion) => void;
   onRegionDoubleClicked: (region: WsRegion) => void;
+  /** Cut or keep mode: sets the color of regions created by dragging. */
+  regionMode?: RegionMode;
 }
 
 export function useWaveSurfer({
-  fileUrl, zoomSlider, pluginRef, onRegionCreated, onRegionUpdated, onRegionDoubleClicked,
+  fileUrl, zoomSlider, pluginRef, onRegionCreated, onRegionUpdated, onRegionDoubleClicked, regionMode = "cut",
 }: UseWaveSurferOptions) {
   const wsRef       = useRef<WaveSurfer | null>(null);
   const waveRef     = useRef<HTMLDivElement>(null);
@@ -103,7 +105,6 @@ export function useWaveSurfer({
     ws.on("pause",  () => setIsPlaying(false));
     ws.on("finish", () => setIsPlaying(false));
 
-    rp.enableDragSelection({ color: cutColor() });
     rp.on("region-created", (r) => regionCreated(r));
     rp.on("region-updated", (r) => regionUpdated(r));
     rp.on("region-double-clicked", (r) => regionDoubleClicked(r));
@@ -115,6 +116,14 @@ export function useWaveSurfer({
       if (pluginRef.current === rp) pluginRef.current = null;
     };
   }, [fileUrl, pluginRef]);
+
+  // Drag to create a region, in the current mode's color (red cut / green keep). Re-enabled when
+  // the mode changes; runs after the create effect above, so the plugin exists.
+  useEffect(() => {
+    const rp = pluginRef.current;
+    if (!rp) return;
+    return rp.enableDragSelection({ color: regionColor(regionMode) });
+  }, [fileUrl, pluginRef, regionMode]);
 
   // ─── Zoom ──────────────────────────────────────────────────────────────────
 
