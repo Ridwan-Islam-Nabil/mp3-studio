@@ -13,6 +13,7 @@
  *   lib/audio/formats.ts — output formats, MIME types, encoder args (pure)
  *   lib/audio/args.ts    — FFmpeg argument / filter-graph builders (pure)
  *   lib/audio/silence.ts — silencedetect log parsing → cut regions (pure)
+ *   lib/audio/loudness.ts — ebur128 result parsing → normalize gain (pure)
  *   lib/audio/log.ts     — FFmpeg log line parsers (pure)
  *   lib/ffmpeg.ts        — this file: runtime + re-exports
  *
@@ -34,25 +35,30 @@
  * HOW CUT REGIONS WORK:
  *   The UI marks sections to DELETE (red on waveform). invertRegions() turns them
  *   into KEPT segments; one FFmpeg pass decodes once → atrim each kept segment →
- *   short fade at interior joins → concat → (loudnorm) → (fades) → encode once.
+ *   short fade at interior joins → concat → (normalize) → (fades) → encode once.
+ *   Fast normalize (the default for `normalize: true`) adds a measure pass
+ *   before it: same graph into ebur128, then volume + limiter in the export pass.
  *   For keep mode, convert with keepToCuts() first.
  */
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
 import {
-  buildExportArgs, buildSegmentExportArgs, buildSilenceDetectArgs, segmentNumber,
+  LOUDNORM_TARGET, buildExportArgs, buildLoudnessMeasureArgs, buildSegmentExportArgs, buildSegmentLoudnessMeasureArgs,
+  buildSilenceDetectArgs, normalizeMode, segmentNumber,
   type ExportOptions,
 } from "./audio/args";
 import { DEFAULT_FORMAT, formatInfo, type OutputFormat } from "./audio/formats";
 import { errorLines, parseInputDuration, parseLogTime } from "./audio/log";
 import { invertRegions, totalLength, type CutRegion } from "./audio/regions";
 import { DEFAULT_SILENCE_OPTIONS, parseSilenceLog, silencesToCuts, type SilenceOptions } from "./audio/silence";
+import { normalizeGainDb, parseEbur128Summary, parseR128Metadata } from "./audio/loudness";
 
 export * from "./audio/regions";
 export * from "./audio/formats";
 export * from "./audio/args";
 export * from "./audio/silence";
+export * from "./audio/loudness";
 export { parseLogTime, parseInputDuration } from "./audio/log";
 
 export type ProgressCallback = (percent: number) => void;
@@ -139,73 +145,106 @@ function resetFFmpeg(): void {
 /** Serializes jobs: the instance has one virtual FS and one log stream. */
 let queue: Promise<unknown> = Promise.resolve();
 
-interface JobSpec {
-  file: File;
-  inputName: string;
-  args: string[];
-  /** Files to read back from the virtual FS after a successful run. */
-  outputNames: string[];
+/** One `exec` of a job. */
+interface JobPass {
   /**
-   * Seconds of media the stats `time=` field counts up to (5–99 % of progress).
-   * A function receives the log so far, for jobs that only learn it from the
-   * input header (`Duration:`).
+   * FFmpeg arguments, or a function of the earlier passes' results (pass 2 of
+   * fast normalize needs the loudness that pass 1 measured).
+   */
+  args: string[] | ((earlier: readonly PassResult[]) => string[]);
+  /** Files this pass writes, read back from the virtual FS after it succeeds. */
+  outputNames?: string[];
+  /**
+   * Seconds of media the stats `time=` field counts up to during this pass.
+   * A function receives the pass's log so far, for jobs that only learn it
+   * from the input header (`Duration:`).
    */
   expectedSec: number | ((logSoFar: string[]) => number | null);
-  onProgress?: ProgressCallback;
+  /** This pass's share of the 5–99 % progress band, relative to the other passes. Default 1. */
+  weight?: number;
 }
 
-interface JobResult {
+interface PassResult {
+  /** Contents of `outputNames`, in order. */
   outputs: Uint8Array[];
   log: string[];
 }
 
-function runJob(spec: JobSpec): Promise<JobResult> {
+interface JobSpec {
+  file: File;
+  inputName: string;
+  /** Run in order on the same input (written once). */
+  passes: JobPass[];
+  onProgress?: ProgressCallback;
+}
+
+function runJob(spec: JobSpec): Promise<PassResult[]> {
   const next = queue.then(() => runJobNow(spec));
   queue = next.catch(() => {});
   return next;
 }
 
-async function runJobNow({ file, inputName, args, outputNames, expectedSec, onProgress }: JobSpec): Promise<JobResult> {
+async function runJobNow({ file, inputName, passes, onProgress }: JobSpec): Promise<PassResult[]> {
   const ff = ffmpeg;
   if (!ff || !loaded) throw new Error("FFmpeg not loaded. Call loadFFmpeg() first.");
 
   // Progress over the whole job: 0–5 % writing the input, 5–99 % running
-  // (stats `time=` / expected seconds), 100 % when the outputs are read back.
-  // Parsed from the stats log because @ffmpeg/ffmpeg's own "progress" event
-  // divides by the INPUT duration, which is wrong once parts are cut out.
-  // Never goes backwards.
+  // (each pass gets its weighted share; within a pass, stats `time=` /
+  // expected seconds), 100 % when the outputs are read back. Parsed from the
+  // stats log because @ffmpeg/ffmpeg's own "progress" event divides by the
+  // INPUT duration, which is wrong once parts are cut out. Never goes backwards.
   let last = -1;
   const report = (p: number) => {
     const v = Math.max(0, Math.min(100, Math.round(p)));
     if (v > last) { last = v; onProgress?.(v); }
   };
+  const weights = passes.map((p) => Math.max(0, p.weight ?? 1));
+  const totalWeight = weights.reduce((a, b) => a + b, 0) || 1;
 
-  const log: string[] = [];
+  let pass = passes[0];
+  let bandStart = 5;
+  let bandSize = 0;
+  let log: string[] = [];
   const onLog = ({ message }: { message: string }) => {
     log.push(message);
     const t = parseLogTime(message);
     if (t === null) return;
-    const total = typeof expectedSec === "function" ? expectedSec(log) : expectedSec;
-    if (total && total > 0) report(5 + Math.min(1, t / total) * 94);
+    const total = typeof pass.expectedSec === "function" ? pass.expectedSec(log) : pass.expectedSec;
+    if (total && total > 0) report(bandStart + Math.min(1, t / total) * bandSize);
   };
 
+  const written: string[] = [];
+  const results: PassResult[] = [];
   ff.on("log", onLog);
   let failed = false;
   try {
     report(0);
     await ff.writeFile(inputName, await fetchFile(file));
+    written.push(inputName);
     report(5);
 
-    const code = await ff.exec(args);
-    if (code !== 0) {
-      const detail = errorLines(log.slice(-30));
-      throw new Error(`FFmpeg exited with code ${code}${detail.length ? ": " + detail.join(" | ") : ""}`);
-    }
+    for (let i = 0; i < passes.length; i++) {
+      pass = passes[i];
+      bandSize = (94 * weights[i]) / totalWeight;
+      log = [];
+      const args = typeof pass.args === "function" ? pass.args(results) : pass.args;
+      const outputNames = pass.outputNames ?? [];
+      written.push(...outputNames);
 
-    const outputs: Uint8Array[] = [];
-    for (const name of outputNames) outputs.push((await ff.readFile(name)) as Uint8Array);
+      const code = await ff.exec(args);
+      if (code !== 0) {
+        const detail = errorLines(log.slice(-30));
+        throw new Error(`FFmpeg exited with code ${code}${detail.length ? ": " + detail.join(" | ") : ""}`);
+      }
+
+      const outputs: Uint8Array[] = [];
+      for (const name of outputNames) outputs.push((await ff.readFile(name)) as Uint8Array);
+      results.push({ outputs, log });
+      bandStart += bandSize;
+      report(bandStart);
+    }
     report(100);
-    return { outputs, log };
+    return results;
   } catch (e) {
     failed = true;
     throw e;
@@ -215,7 +254,7 @@ async function runJobNow({ file, inputName, args, outputNames, expectedSec, onPr
       resetFFmpeg();
     } else {
       // Free the virtual filesystem (every file lives in wasm memory)
-      for (const name of [inputName, ...outputNames]) await ff.deleteFile(name).catch(() => {});
+      for (const name of written) await ff.deleteFile(name).catch(() => {});
     }
   }
 }
@@ -235,6 +274,11 @@ export interface ExportResult {
   extension: string;
   /** Expected length of the output (sum of the kept segments), seconds. */
   durationSec: number;
+  /**
+   * Fast normalize only: what pass 1 measured (integrated LUFS; -70 or lower
+   * = silence) and the gain pass 2 applied (dB, 0 for silence).
+   */
+  loudness?: { measuredLufs: number; gainDb: number };
 }
 
 export interface ExportJobOptions extends ExportOptions {
@@ -243,7 +287,22 @@ export interface ExportJobOptions extends ExportOptions {
 }
 
 /**
+ * Progress weights of the two fast-normalize passes: the measure pass (decode +
+ * meter, no encoding) took ~0.45 s and the export pass ~2 s for a 3-minute MP3.
+ */
+const MEASURE_WEIGHT = 1;
+const ENCODE_WEIGHT = 4;
+
+/** Measured loudness → gain for pass 2. */
+function loudnessFrom(measuredLufs: number | null, what: string): { measuredLufs: number; gainDb: number } {
+  if (measuredLufs === null) throw new Error(`Could not read the measured loudness of ${what} from FFmpeg.`);
+  return { measuredLufs, gainDb: normalizeGainDb(measuredLufs, LOUDNORM_TARGET.integratedLufs) };
+}
+
+/**
  * Removes the cut regions and encodes the rest as ONE file.
+ * With `normalize: true | "fast"` this is two FFmpeg runs on the same input:
+ * a loudness measurement of the kept audio, then the export with the gain.
  *
  * @param file      The source audio File (any format FFmpeg can decode)
  * @param cuts      Sections to REMOVE ({start, end} seconds); [] = whole file
@@ -263,17 +322,32 @@ export async function exportAudio(
   const outputSec = totalLength(keep);
   const inputName = "input" + getExtension(file.name);
   const outputName = `output.${info.extension}`;
-  const args = buildExportArgs(inputName, keep, duration, outputName, { ...options, format });
+  const exportOptions = { ...options, format };
+  const fast = normalizeMode(options.normalize) === "fast";
 
-  const { outputs } = await runJob({
-    file, inputName, args, outputNames: [outputName], expectedSec: outputSec, onProgress: options.onProgress,
-  });
+  let loudness: ExportResult["loudness"];
+  // Built up front so "everything is cut" throws before FFmpeg runs.
+  const passes: JobPass[] = fast
+    ? [
+        { args: buildLoudnessMeasureArgs(inputName, keep, duration), expectedSec: outputSec, weight: MEASURE_WEIGHT },
+        {
+          args: ([measure]) => {
+            loudness = loudnessFrom(parseEbur128Summary(measure.log), "the audio");
+            return buildExportArgs(inputName, keep, duration, outputName, exportOptions, loudness.gainDb);
+          },
+          outputNames: [outputName], expectedSec: outputSec, weight: ENCODE_WEIGHT,
+        },
+      ]
+    : [{ args: buildExportArgs(inputName, keep, duration, outputName, exportOptions), outputNames: [outputName], expectedSec: outputSec }];
+
+  const results = await runJob({ file, inputName, passes, onProgress: options.onProgress });
   return {
-    blob: toBlob(outputs[0], info.mimeType),
+    blob: toBlob(results[results.length - 1].outputs[0], info.mimeType),
     format,
     mimeType: info.mimeType,
     extension: info.extension,
     durationSec: outputSec,
+    ...(loudness ? { loudness } : {}),
   };
 }
 
@@ -311,7 +385,8 @@ export interface SegmentResult extends ExportResult {
 /**
  * Exports every kept segment (everything between the cuts) as its own file, in
  * one FFmpeg run (see buildSegmentExportArgs() for why one run). Options apply
- * to each file: `normalize` normalizes each file separately, `fade` fades each
+ * to each file: `normalize` normalizes each file separately (fast mode: one
+ * measure run with a meter per segment, then the export run), `fade` fades each
  * file's start/end. Throws if everything is cut.
  */
 export async function exportSegments(
@@ -324,20 +399,44 @@ export async function exportSegments(
   const info = formatInfo(format);
   const keep = invertRegions(cuts, duration);
   const inputName = "input" + getExtension(file.name);
-  const vfsNames = keep.map((_, i) => `seg-${segmentNumber(i, keep.length)}.${info.extension}`);
-  const args = buildSegmentExportArgs(inputName, keep, duration, vfsNames, { ...options, format });
+  const num = (i: number) => segmentNumber(i, keep.length);
+  const vfsNames = keep.map((_, i) => `seg-${num(i)}.${info.extension}`);
+  const exportOptions = { ...options, format };
   const stem = options.baseName?.trim() || stripExtension(file.name) || "audio";
+  const fast = normalizeMode(options.normalize) === "fast";
 
-  const { outputs } = await runJob({
-    file, inputName, args, outputNames: vfsNames, expectedSec: duration, onProgress: options.onProgress,
-  });
+  let loudness: NonNullable<ExportResult["loudness"]>[] | undefined;
+  let passes: JobPass[];
+  if (fast) {
+    const meterNames = keep.map((_, i) => `loudness-${num(i)}.txt`);
+    passes = [
+      {
+        args: buildSegmentLoudnessMeasureArgs(inputName, keep, duration, meterNames),
+        outputNames: meterNames, expectedSec: duration, weight: MEASURE_WEIGHT,
+      },
+      {
+        args: ([measure]) => {
+          const text = new TextDecoder();
+          loudness = measure.outputs.map((data, i) => loudnessFrom(parseR128Metadata(text.decode(data)), `segment ${i + 1}`));
+          return buildSegmentExportArgs(inputName, keep, duration, vfsNames, exportOptions, loudness.map((l) => l.gainDb));
+        },
+        outputNames: vfsNames, expectedSec: duration, weight: ENCODE_WEIGHT,
+      },
+    ];
+  } else {
+    passes = [{ args: buildSegmentExportArgs(inputName, keep, duration, vfsNames, exportOptions), outputNames: vfsNames, expectedSec: duration }];
+  }
+
+  const results = await runJob({ file, inputName, passes, onProgress: options.onProgress });
+  const outputs = results[results.length - 1].outputs;
   return keep.map((seg, i) => ({
     blob: toBlob(outputs[i], info.mimeType),
     format,
     mimeType: info.mimeType,
     extension: info.extension,
     durationSec: seg.end - seg.start,
-    fileName: `${stem}-${segmentNumber(i, keep.length)}.${info.extension}`,
+    ...(loudness ? { loudness: loudness[i] } : {}),
+    fileName: `${stem}-${num(i)}.${info.extension}`,
     index: i,
     start: seg.start,
     end: seg.end,
@@ -371,13 +470,16 @@ export async function detectSilence(file: File, options: DetectSilenceOptions = 
   const args = buildSilenceDetectArgs(inputName, { thresholdDb, minSilenceSec });
 
   let headerDuration: number | null = null;
-  const { log } = await runJob({
-    file, inputName, args, outputNames: [], onProgress: options.onProgress,
-    expectedSec: (lines) => {
-      if (options.duration) return options.duration;
-      headerDuration ??= parseInputDuration(lines.join("\n"));
-      return headerDuration;
-    },
+  const [{ log }] = await runJob({
+    file, inputName, onProgress: options.onProgress,
+    passes: [{
+      args,
+      expectedSec: (lines) => {
+        if (options.duration) return options.duration;
+        headerDuration ??= parseInputDuration(lines.join("\n"));
+        return headerDuration;
+      },
+    }],
   });
 
   // The final stats `time=` is the decoded length; the header's Duration is only
