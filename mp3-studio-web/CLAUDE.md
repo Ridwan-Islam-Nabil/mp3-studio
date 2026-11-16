@@ -39,8 +39,12 @@ mp3-studio-web/
 │   │                            stays "Inter"), wraps everything in <PostHogProvider>
 │   ├── page.tsx              ← Landing page (server component, SEO copy, FAQ, JSON-LD)
 │   ├── globals.css           ← CSS custom properties, glass card, button styles
-│   ├── sitemap.ts            ← Generates /sitemap.xml (home, /blog, every post)
+│   ├── sitemap.ts            ← Generates /sitemap.xml (home, tool pages, /blog, every post)
+│   │                            (+ sitemap.test.ts: sitemap + robots)
 │   ├── robots.ts             ← Generates /robots.txt (disallows /editor)
+│   ├── (tools)/              ← Feature landing pages: one static route folder per tool,
+│   │   ├── <slug>/page.tsx      each page.tsx = `toolMetadata(SLUG)` + `<ToolPage slug={SLUG}/>`
+│   │   └── tool-routes.test.ts  (one folder per entry in lib/tools.ts, no extras)
 │   ├── editor/
 │   │   └── page.tsx          ← Editor route: <EditorLoader/> + <FeedbackWidget/>, noindex
 │   └── blog/
@@ -49,6 +53,11 @@ mp3-studio-web/
 ├── components/
 │   ├── PostHogProvider.tsx   ← "use client" — calls initPostHog() once on mount
 │   ├── FeedbackWidget.tsx    ← "use client" — floating feedback button/modal → PostHog event
+│   ├── site/                 ← Server components shared by the marketing pages (no client JS):
+│   │   ├── ToolPage.tsx         tool page layout + toolMetadata(slug)
+│   │   ├── SiteNav.tsx          sticky top bar (logo, Tools, Blog, Open Editor)
+│   │   ├── SiteFooter.tsx       footer with links to every tool page and the blog
+│   │   └── ToolsGrid.tsx        tool cards (home "Tools" section, "Related tools")
 │   └── editor/
 │       ├── EditorLoader.tsx  ← "use client" — next/dynamic import of AudioEditor, ssr: false
 │       ├── AudioEditor.tsx   ← "use client" — thin entry: file + object URL, upload analytics,
@@ -99,6 +108,10 @@ mp3-studio-web/
 │   │   ├── loudness.ts       ← parseEbur128Summary, parseR128Metadata, normalizeGainDb
 │   │   └── log.ts            ← parseLogTime, parseInputDuration, errorLines
 │   ├── analytics.ts          ← PostHog init + typed track*() helpers
+│   ├── site.ts               ← SITE_URL (from NEXT_PUBLIC_SITE_URL), SITE_HOST, absoluteUrl()
+│   ├── seo.ts                ← pageMetadata() (canonical + OG/Twitter), jsonLdString()
+│   ├── tools.ts              ← Tool page content + editor-link contract + toolJsonLd()
+│   │                            (+ tools.test.ts, site.test.ts)
 │   └── posts.ts              ← Blog post content (array of Post objects, HTML strings)
 ├── public/
 │   ├── screenshots/          ← Editor screenshots used on the landing page
@@ -642,16 +655,93 @@ Add new events as typed helpers in `lib/analytics.ts` rather than calling `posth
 
 Organic search is the main acquisition channel, so most recent work is here.
 
-- `app/layout.tsx` — title, description, keyword list, Open Graph/Twitter cards, robots,
-  Google Search Console verification (two tokens) and Bing (`msvalidate.01`)
+- `app/layout.tsx` — `metadataBase` (= `SITE_URL`), default title, description, keyword list,
+  Open Graph/Twitter cards (image `/thumbnail.png`), robots, Google Search Console verification
+  (two tokens) and Bing (`msvalidate.01`). **No canonical here** — see below.
 - `app/page.tsx` — server-rendered landing page with keyword-targeted H1/H2s, screenshots,
-  comparison table, FAQ, and two JSON-LD blocks (`WebApplication` + `FAQPage`)
+  a "More free audio tools" section (`#tools`, links to every tool page), comparison table, FAQ,
+  and two JSON-LD blocks (`WebApplication` + `FAQPage`)
 - `lib/posts.ts` — blog posts. Each `Post` has `slug`, `title`, `description`, `date`, `keywords`
   and `content` (an HTML string). Adding a post to the array automatically adds its page
-  (`generateStaticParams`), metadata and sitemap entry.
-- `/editor` is `noindex` and disallowed in `robots.ts` — only the landing page and blog are indexed.
-- The base URL `https://mp3-studio.vercel.app` is hard-coded in `sitemap.ts` and `robots.ts`;
-  update both if a custom domain is added.
+  (`generateStaticParams`), metadata and sitemap entry. Links to our own pages inside `content`
+  are **relative** (`href="/"`, `href="/trim-voice-note"`); visible host names use `${SITE_HOST}`.
+- **Tool pages** (`lib/tools.ts` + `app/(tools)/<slug>/page.tsx` + `components/site/ToolPage.tsx`)
+  — one keyword-targeted landing page per feature, see below.
+- `components/site/SiteFooter.tsx` — on the home page, tool pages and blog: links to every tool
+  page and the blog (internal linking).
+- `/editor` is `noindex` and disallowed in `robots.ts` — it's the only disallowed path; the home
+  page, tool pages and blog are indexed.
+
+### Site URL (`lib/site.ts`)
+
+`SITE_URL` is the one source of truth for the canonical origin: `NEXT_PUBLIC_SITE_URL` if set
+(trimmed, trailing slashes removed; invalid values fall back), else
+`https://mp3-studio.vercel.app`. Used by `metadataBase`, every canonical and OG URL
+(`pageMetadata()` in `lib/seo.ts`), all JSON-LD, `sitemap.ts`, `robots.ts`, and the visible host
+in blog posts (`SITE_HOST`). Never hard-code the domain again — import `SITE_URL` /
+`absoluteUrl(path)`. It's a `NEXT_PUBLIC_*` variable, so it is inlined at **build** time.
+
+**Canonicals are per page**, via `pageMetadata({ title, description, path })` (home, blog index,
+posts, tool pages). Don't put `alternates.canonical` in the root layout: every page that forgets
+to override it would declare the home page as its canonical. Use `pageMetadata()` for new indexed
+pages also because Next.js merges metadata shallowly — a page's `openGraph` replaces the layout's
+entirely, images included. Serialize JSON-LD with `jsonLdString()` (escapes `<`).
+
+### Moving to a custom domain
+
+1. In Vercel → Project → Settings → Environment Variables, set `NEXT_PUBLIC_SITE_URL` to the new
+   origin (e.g. `https://example.com`, no trailing slash) for Production, then redeploy (it's read
+   at build time).
+2. Vercel → Settings → Domains: add the domain and configure DNS as shown there.
+3. Make the old `mp3-studio.vercel.app` **301-redirect** to the new domain (Domains → edit the
+   `.vercel.app` domain → redirect to the new one, permanent).
+4. Google Search Console: add the new domain as a property (verify; a new token may need adding to
+   `verification` in `app/layout.tsx`) and use **Change of Address** from the old property. Bing
+   Webmaster Tools: add/verify the new site (or import from Search Console) and use its site move
+   tool.
+5. Submit `https://<new-domain>/sitemap.xml` in both, and spot-check that `/robots.txt`, the
+   sitemap and a page's `<link rel="canonical">` show the new domain.
+
+### Tool pages
+
+Data in `lib/tools.ts` (`tools: Tool[]`), layout in `components/site/ToolPage.tsx`, one tiny
+static route per page in `app/(tools)/<slug>/page.tsx` (a route group: the URL is `/<slug>`).
+Static folders instead of a root `[tool]` segment because a root dynamic segment catches every
+unknown URL, and `next start` logged a `NoFallbackError` for each one.
+
+Each page: unique `<title>` / meta description / keywords, exactly one H1, intro, 3–5 steps
+(`id="step-N"`), "Good to know" (honest limits), 4–6 FAQs, a CTA (`data-testid="tool-cta"`) to the
+editor with the tool preselected, related tools, related blog posts, canonical, and three JSON-LD
+blocks (`HowTo`, `FAQPage`, `BreadcrumbList`). No client JS beyond what every page already loads.
+
+| Page | Editor link (contract with the editor's `?tool=` handling) |
+|---|---|
+| `/remove-silence-from-audio` | `/editor?tool=remove-silence` |
+| `/normalize-audio-volume-online` | `/editor?tool=normalize` |
+| `/iphone-ringtone-maker` | `/editor?tool=ringtone` |
+| `/android-ringtone-maker` | `/editor?tool=ringtone&device=android` |
+| `/split-audio-into-parts` | `/editor?tool=split` |
+| `/convert-audio-to-wav-mp3-m4a` | `/editor?tool=convert` |
+| `/trim-voice-note` | `/editor` |
+| `/cut-lecture-recording` | `/editor?tool=remove-silence` |
+
+Valid ids are `EDITOR_TOOL_IDS` (`remove-silence`, `normalize`, `ringtone`, `split`, `convert`)
+and `EDITOR_DEVICES` (`android`, only with `ringtone`); `editorHref()` builds the link.
+
+**Adding a tool page:**
+1. Add a `Tool` entry to `tools` in `lib/tools.ts` (unique slug/title/description/H1; title
+   ≤ 65 chars, description 100–165; 3–5 steps; 4–6 FAQs; existing `related` / `relatedPosts`
+   slugs; `updated` date). If it needs a new `?tool=` id, add it to `EDITOR_TOOL_IDS` only once the
+   editor handles it.
+2. Copy any `app/(tools)/<slug>/page.tsx` to a new folder and change `SLUG`.
+3. Add its slug and editor link to `CONTRACT` in `lib/tools.test.ts`.
+4. `npm test` + `npx playwright test --project=chromium e2e/landing-pages.spec.ts`. Sitemap,
+   footer and the home page's Tools section pick it up automatically.
+
+**Copy rules** (owners' halal growth plan): describe only what the editor really does (no
+invented stats, testimonials or user counts; say "one at a time" where that's the truth); prefer
+speech examples (podcasts, lectures, khutbahs, interviews, voice notes, nasheeds); **never market
+Quran recitation as a ringtone** (`tools.test.ts` fails on "Quran"/"Koran" in tool copy).
 
 **Server components can't have event handlers.** `app/page.tsx` and the blog pages are server
 components — adding `onClick`, `onMouseEnter`, etc. breaks the build. Use CSS `:hover` or move the
@@ -675,7 +765,10 @@ WaveSurfer and FFmpeg need browser APIs, and loading them eagerly froze the brow
 `ssr: false` is only allowed inside a client component — that's why `EditorLoader` exists instead
 of calling `dynamic()` from `app/editor/page.tsx` directly.
 
-`lib/ffmpeg.ts`, `lib/audio/` and `lib/posts.ts` have no React imports (`lib/audio/` has no DOM
+`components/site/` (nav, footer, tool page layout) are server components too — style hover
+states with CSS classes in `globals.css`, never event handlers.
+
+`lib/ffmpeg.ts`, `lib/audio/`, `lib/posts.ts`, `lib/site.ts`, `lib/seo.ts` and `lib/tools.ts` have no React imports (`lib/audio/` has no DOM
 or FFmpeg imports either, so it runs in Vitest's Node environment).
 
 ---
@@ -686,6 +779,7 @@ None are required. Optional:
 
 | Variable | Purpose |
 |---|---|
+| `NEXT_PUBLIC_SITE_URL` | Canonical origin, e.g. `https://example.com` (default `https://mp3-studio.vercel.app`). Read at **build** time; see "SEO → Site URL" and "Moving to a custom domain" |
 | `NEXT_PUBLIC_POSTHOG_KEY` | Enables PostHog analytics and feedback collection |
 | `NEXT_PUBLIC_POSTHOG_HOST` | PostHog host (defaults to `https://us.i.posthog.com`) |
 | `DISABLE_COI` | `1` = build without the COOP/COEP headers (testing only; read at **build** time) |
@@ -731,7 +825,11 @@ The COOP/COEP headers from `next.config.ts` apply in development too (unless bui
 ### Tests
 
 - **Unit (Vitest)** — `lib/posts.test.ts` (slugs unique and URL-safe, required fields, valid
-  dates), `lib/audio/*.test.ts` (`regions.test.ts`: `invertRegions`, mirroring the Python tests
+  dates), `lib/tools.test.ts` (tool pages: unique slugs/titles/descriptions/H1s, field sizes,
+  editor links = the contract and valid ids only, related slugs exist, no Quran wording, JSON-LD
+  parses with the right steps/FAQs/URLs), `lib/site.test.ts` (`resolveSiteUrl`, `absoluteUrl`,
+  `jsonLdString`), `app/sitemap.test.ts` (every tool page and post in the sitemap, robots
+  disallows only `/editor`), `app/(tools)/tool-routes.test.ts` (one route folder per tool), `lib/audio/*.test.ts` (`regions.test.ts`: `invertRegions`, mirroring the Python tests
   of the local app, and the `keepToCuts` round trip; `args.test.ts`: filter graphs and args per
   format / normalize / fade / split; `formats.test.ts`; `silence.test.ts`: silencedetect logs
   captured from the wasm core and native FFmpeg; `loudness.test.ts`: ebur128 summaries and
@@ -760,6 +858,10 @@ The COOP/COEP headers from `next.config.ts` apply in development too (unless bui
   overlay button, and reload + same file restores the cuts (toast, Clear, Ctrl+Z). No FFmpeg
   needed, so it runs in seconds. To run against another port than 3000:
   `E2E_PORT=3211 npx playwright test`.
+- **E2E landing pages (Playwright)** — `e2e/landing-pages.spec.ts`: every tool page returns 200
+  with its title, one H1, meta description, canonical, parseable `HowTo` + `FAQPage` JSON-LD,
+  visible steps/FAQs and a CTA whose `href` matches the contract (not followed); the home page
+  and footer link to every tool page; an unknown top-level path is a 404. Seconds to run.
 - Test files are excluded from `tsconfig.json` so `next build` never type-checks them;
   `tsconfig.test.json` covers them instead (`npm run typecheck`).
 - The waveform wrapper in `ui/WaveformCard.tsx` carries `data-testid="waveform"` — keep it when

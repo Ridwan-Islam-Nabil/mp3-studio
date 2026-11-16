@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import SiteFooter from "@/components/site/SiteFooter";
 import { posts, getPostBySlug } from "@/lib/posts";
+import { OG_IMAGE, jsonLdString, pageMetadata } from "@/lib/seo";
+import { absoluteUrl } from "@/lib/site";
 
 export async function generateStaticParams() {
   return posts.map((p) => ({ slug: p.slug }));
@@ -15,17 +18,14 @@ export async function generateMetadata({
   const { slug } = await params;
   const post = getPostBySlug(slug);
   if (!post) return {};
-  return {
+  return pageMetadata({
     title: `${post.title} – MP3 Studio`,
     description: post.description,
+    path: `/blog/${post.slug}`,
     keywords: post.keywords,
-    openGraph: {
-      title: post.title,
-      description: post.description,
-      type: "article",
-      publishedTime: post.date,
-    },
-  };
+    type: "article",
+    publishedTime: post.date,
+  });
 }
 
 export default async function PostPage({
@@ -41,6 +41,9 @@ export default async function PostPage({
     "@context": "https://schema.org",
     "@type": "Article",
     headline: post.title,
+    url: absoluteUrl(`/blog/${post.slug}`),
+    mainEntityOfPage: absoluteUrl(`/blog/${post.slug}`),
+    image: absoluteUrl(OG_IMAGE),
     description: post.description,
     datePublished: post.date,
     author: { "@type": "Organization", name: "RIN Production" },
@@ -51,7 +54,7 @@ export default async function PostPage({
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: jsonLdString(jsonLd) }}
       />
       <main
         style={{
@@ -152,6 +155,7 @@ export default async function PostPage({
           </Link>
         </div>
       </main>
+      <SiteFooter />
 
       <style>{`
         .prose h2 { color: #f1f5f9; font-size: 22px; font-weight: 700; margin: 36px 0 12px; }
