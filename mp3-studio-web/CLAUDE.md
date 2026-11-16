@@ -35,7 +35,8 @@ Unlike the local app, there is **no YouTube download** here — upload only.
 mp3-studio-web/
 ├── app/
 │   ├── layout.tsx            ← Root layout — SEO metadata, keywords, Google/Bing verification,
-│   │                            Inter font, wraps everything in <PostHogProvider>
+│   │                            Inter via next/font/google (self-hosted at build, family name
+│   │                            stays "Inter"), wraps everything in <PostHogProvider>
 │   ├── page.tsx              ← Landing page (server component, SEO copy, FAQ, JSON-LD)
 │   ├── globals.css           ← CSS custom properties, glass card, button styles
 │   ├── sitemap.ts            ← Generates /sitemap.xml (home, /blog, every post)
@@ -82,7 +83,9 @@ mp3-studio-web/
 │   ├── screenshots/          ← Editor screenshots used on the landing page
 │   ├── thumbnail.png         ← Open Graph image
 │   └── icon-192.png
-├── next.config.ts            ← Sets COOP/COEP headers on every response
+├── next.config.ts            ← COOP/COEP headers on every response (unless DISABLE_COI=1),
+│                                immutable cache for /ffmpeg/*
+├── playwright.config.ts      ← e2e: chromium / firefox / webkit projects, starts the app
 ├── package.json
 └── CLAUDE.md                 ← This file
 ```
@@ -179,22 +182,69 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 They were added because multi-threaded FFmpeg.wasm needs `SharedArrayBuffer`. The app loads the
-**single-threaded** core, which does not use `SharedArrayBuffer`.
+**single-threaded** core, which does not use `SharedArrayBuffer` (the `@ffmpeg/ffmpeg` worker
+talks to the page with plain `postMessage`).
 
-**Tested 2026-11-15 (Chromium, production build, headers removed from `next.config.ts`, core
-self-hosted):** the page was *not* cross-origin isolated (`crossOriginIsolated === false`,
-`typeof SharedArrayBuffer === "undefined"`), and FFmpeg still worked:
-- built-in browser: 5 s tone with a 1.6 s cut → Preview produced a 3.37 s MP3, no errors;
-- Playwright smoke test (fresh profile, so the core was fetched over the network): upload → cut →
-  Export downloaded a valid MP3.
+**Switch for testing:** `DISABLE_COI=1` omits the two headers (default: on; the `/ffmpeg/*`
+cache header always stays). Headers are compiled into the build, so the variable must be set for
+`next build` — setting it only for `next start` has no effect (verified). To repeat the
+experiment locally:
 
-So on Chromium the headers are **not needed** for the single-threaded core. Not yet tested:
-Firefox and Safari, and the deployed Vercel site. They are still set; whether to drop them is an
-open decision. Removing them would allow third-party embeds; keeping them is required only if the
-multi-threaded core (`@ffmpeg/core-mt`) is ever adopted. **Do not remove them without testing
-Preview and Export in Firefox and Safari as well.** While they are set, `require-corp` blocks
-third-party resources (images, iframes, scripts) that don't send CORS/CORP headers — keep that in
-mind when embedding anything. Same-origin files (like the self-hosted core) are unaffected.
+```bash
+# Stop any server on the port first, or Playwright reuses it (with whatever headers it has).
+DISABLE_COI=1 npm run test:e2e:chromium   # builds without the headers, starts, runs the tests
+npm run build                             # afterwards: rebuild WITH the headers
+```
+
+Check a running build with `curl -sI http://localhost:3000/editor` (no `Cross-Origin-*` lines
+when disabled).
+
+Each smoke test prints one line per browser —
+`[coi] <browser> "<test>": crossOriginIsolated=… typeof SharedArrayBuffer=… consoleErrors=[…]` —
+and fails on uncaught page errors. CI has a **temporary, non-blocking** step on pull requests
+("COOP/COEP experiment") that rebuilds with `DISABLE_COI=1` and reruns the suite in all three
+browsers; read its `[coi]` lines, then delete the step once the decision is made.
+
+**Results (2026-11-16, production build, self-hosted core, smoke spec = upload → drag a cut →
+Export downloads a valid MP3, and upload → cut → Preview loads a ~3.5 s result into `<audio>`):**
+
+| Browser | Headers | Export | Preview | `crossOriginIsolated` | `typeof SharedArrayBuffer` | Console errors |
+|---|---|---|---|---|---|---|
+| Chromium (Playwright, Windows) | on | ✅ | ✅ | `true` | `"function"` | none |
+| Chromium (Playwright, Windows) | **off** | ✅ | ✅ | `false` | `"undefined"` | none |
+| Firefox | on / off | — | — | — | — | not run locally, see below |
+| WebKit | on / off | — | — | — | — | not run locally, see below |
+
+Earlier (2026-11-15) the built-in Chromium browser with the headers off also produced a correct
+Preview (5 s tone, 1.6 s cut → 3.37 s MP3).
+
+**Why Firefox / WebKit are blank:** they could not run on the Windows dev machine (Windows 11
+Insider build 26300). Playwright's patched Firefox build (`firefox-1572`) doesn't start
+("side-by-side configuration is incorrect": the `mozglue` assembly isn't resolved, even after a
+clean reinstall); stock Firefox 150 via `channel: "moz-firefox"` (WebDriver BiDi) fails on
+`emulation.setMediaFeaturesOverride` ("unknown command"). Playwright's WebKit on Windows has **no
+`AudioContext`** and `<audio>` rejects MP3 (`MEDIA_ERR_SRC_NOT_SUPPORTED`), so WaveSurfer never
+gets ready ("Mark to Cut" stays disabled). That is a limitation of the Windows WebKit port, not an
+app bug: Safari and Linux WebKit (GStreamer) have both. Docker Desktop (for the Linux Playwright
+image) didn't start its engine on that machine either. **Both browsers run in CI on Linux**; the
+first PR run of this branch fills in the two rows (with and without headers).
+
+**Recommendation: remove the headers once the CI experiment step is green in Firefox and WebKit.**
+- *What breaks if they are removed:* nothing the app uses today — the single-threaded core
+  doesn't need `SharedArrayBuffer`, and Chromium shows identical Export/Preview results with the
+  page not isolated. What you lose: the option to switch to the multi-threaded core
+  (`@ffmpeg/core-mt`, faster exports) without bringing the headers back. If that ever happens,
+  set them **only on `/editor`** (`source: "/editor"`) so the landing page and blog stay
+  unaffected.
+- *What breaks while they are kept:* `require-corp` blocks every third-party subresource that
+  doesn't send CORP/CORS headers — YouTube/other iframes, external images or ad scripts on the
+  landing page and blog; `same-origin` COOP severs `window.opener` links with any popup (e.g. a
+  future OAuth or payment popup). Same-origin files (the self-hosted core, `next/font` files) are
+  unaffected.
+- *If the CI step fails in Firefox or WebKit without the headers:* keep them and record the
+  `[coi]` line and the error here.
+
+**Not yet tested in any form:** real Safari on macOS/iOS and the deployed Vercel site.
 
 ---
 
@@ -377,6 +427,7 @@ None are required. Optional:
 |---|---|
 | `NEXT_PUBLIC_POSTHOG_KEY` | Enables PostHog analytics and feedback collection |
 | `NEXT_PUBLIC_POSTHOG_HOST` | PostHog host (defaults to `https://us.i.posthog.com`) |
+| `DISABLE_COI` | `1` = build without the COOP/COEP headers (testing only; read at **build** time) |
 
 Set them in Vercel project settings. `.env*` files are gitignored.
 
@@ -390,11 +441,31 @@ npm run dev        # http://localhost:3000
 npm run build      # run before pushing — Vercel fails the deploy on TypeScript errors
 npm run lint
 npm test           # Vitest unit tests (lib/ and components/**/*.test.ts)
-npm run test:e2e   # Playwright smoke test (builds + starts the app itself)
+npm run test:e2e   # Playwright e2e in Chromium, Firefox and WebKit (builds + starts the app itself)
 npm run typecheck  # tsc for app code and for test files
 ```
 
-The COOP/COEP headers from `next.config.ts` apply in development too.
+**E2E per browser:**
+
+```bash
+npx playwright install --with-deps chromium firefox webkit   # once (drop --with-deps on Windows/macOS)
+npm run test:e2e:chromium    # = playwright test --project=chromium
+npm run test:e2e:firefox
+npm run test:e2e:webkit
+E2E_PORT=4517 npm run test:e2e:chromium   # use another port (default 3000)
+```
+
+- Outside CI, Playwright **reuses any server already listening on the port** — including another
+  checkout's `next dev`. Pick a free `E2E_PORT` (or stop other servers) or you are testing someone
+  else's code. In CI it only runs `next start` (the job already built).
+- **On Windows only Chromium works.** Playwright's WebKit on Windows has no Web Audio / MP3
+  playback, so the editor never loads audio there, and Playwright's Firefox didn't start on the
+  Windows 11 Insider dev machine (details under "The COOP/COEP headers"). Firefox and WebKit run in
+  CI on Linux — or locally on Linux/macOS, or in the `mcr.microsoft.com/playwright:v<version>-noble`
+  Docker image.
+
+The COOP/COEP headers from `next.config.ts` apply in development too (unless built/started with
+`DISABLE_COI=1`).
 
 ### Tests
 
@@ -405,11 +476,15 @@ The COOP/COEP headers from `next.config.ts` apply in development too.
   (time format, zoom scale, file metadata). Vitest runs in Node, so keep `history.ts` /
   `editorUtils.ts` free of React and DOM. Config: `vitest.config.ts`. Known bugs are written as `it.fails(...)`: when you fix one, Vitest
   reports that test as failing — change it to `it(...)`.
-- **E2E smoke (Playwright)** — `e2e/editor-smoke.spec.ts`: opens `/editor`, uploads
-  `e2e/fixtures/tone-5s.mp3`, drags a cut on the waveform, clicks Export and checks that an `.mp3`
-  downloads. `playwright.config.ts` runs `npm run build && npm run start` itself (or reuses a server
-  already on port 3000 outside CI — stop `npm run dev` first if you want to test a fresh build).
-  It needs internet: the FFmpeg core comes from unpkg. First time: `npx playwright install chromium`.
+- **E2E smoke (Playwright)** — `e2e/editor-smoke.spec.ts`, two tests, each in Chromium, Firefox
+  and WebKit (`playwright.config.ts` projects): opens `/editor`, uploads
+  `e2e/fixtures/tone-5s.mp3`, drags a cut on the waveform, then either clicks Export and checks that
+  a valid `.mp3` downloads (and that the FFmpeg core came from our own origin), or clicks Preview
+  and checks that the modal's `<audio>` loads a shortened result. Both fail fast with the toast
+  text if an error toast appears, fail on uncaught page errors, and print a `[coi]` diagnostics
+  line. `playwright.config.ts` runs `npm run build && npm run start` itself (only `npm run start`
+  in CI), or reuses a server already on the port outside CI — stop `npm run dev` first if you
+  want to test a fresh build. No internet needed (the core is self-hosted).
 - Test files are excluded from `tsconfig.json` so `next build` never type-checks them;
   `tsconfig.test.json` covers them instead (`npm run typecheck`).
 - The waveform wrapper in `ui/WaveformCard.tsx` carries `data-testid="waveform"` — keep it when
@@ -419,7 +494,8 @@ The COOP/COEP headers from `next.config.ts` apply in development too.
 - WaveSurfer's drag helper swallows any click within 10 ms after a drag ends. Automated tests that
   click a button immediately after dragging on the waveform must wait a moment first.
 - CI (`.github/workflows/ci.yml` at the repo root) runs lint, build, test type-check, Vitest and
-  Playwright on every push and pull request.
+  Playwright (Chromium, Firefox, WebKit) on every push and pull request. If e2e ever gets too slow
+  (> ~5 min), run only Chromium on push and all three on PRs/main.
 
 ---
 
@@ -456,7 +532,12 @@ break export, and the version lives in `package.json` instead of a string.
 
 ## Things That Will Break If You're Not Careful
 
-1. **Removing the COOP/COEP headers** without testing — see the section above.
+1. **Removing the COOP/COEP headers** before the Firefox/WebKit results are in — see the section
+   above. And while they are set, third-party embeds without CORP/CORS headers are blocked.
+
+12. **Loading fonts with a `<link>` to Google Fonts** — lint warning `no-page-custom-font`; use
+    `next/font/google` in `app/layout.tsx`. It keeps the family name `"Inter"`, so the literal
+    `"Inter"` in `globals.css`, the blog pages and `EditorLoader` still resolves.
 
 2. **Using WaveSurfer or FFmpeg outside the client editor** — both touch `window`/DOM. They must
    stay inside `components/editor/` (reached only through `AudioEditor.tsx`, loaded with

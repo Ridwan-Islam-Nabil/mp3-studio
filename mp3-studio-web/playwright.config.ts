@@ -22,9 +22,17 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // One browser only: `--project=chromium|firefox|webkit` (or `npm run test:e2e:<browser>`).
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "firefox", use: { ...devices["Desktop Firefox"] } },
+    { name: "webkit", use: { ...devices["Desktop Safari"] } },
+  ],
   webServer: {
-    command: `npm run build && npm run start -- --port ${PORT}`,
+    // CI has just run `npm run build` in an earlier step, so only start the server there.
+    command: process.env.CI
+      ? `npm run start -- --port ${PORT}`
+      : `npm run build && npm run start -- --port ${PORT}`,
     url: `http://localhost:${PORT}`,
     timeout: 5 * 60_000,
     reuseExistingServer: !process.env.CI,

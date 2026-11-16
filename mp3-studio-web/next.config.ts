@@ -10,23 +10,31 @@ import pkg from "./package.json";
 const FFMPEG_CORE_VERSION = pkg.dependencies["@ffmpeg/core"];
 
 /**
- * CRITICAL: FFmpeg.wasm uses SharedArrayBuffer, which requires these two headers
- * on EVERY response. Without them, FFmpeg will fail silently in the browser.
+ * COOP/COEP make the page cross-origin isolated (SharedArrayBuffer available). Only the
+ * multi-threaded FFmpeg core needs that; the single-threaded core we load works without
+ * them — see "The COOP/COEP headers" in CLAUDE.md for the cross-browser results.
  *
- * These are set on Vercel automatically when you add them here.
+ * DISABLE_COI=1 omits them (for testing). Headers are compiled at BUILD time, so set it
+ * for `next build`, not just `next start`. Default: headers on.
  */
+const COI_HEADERS = process.env.DISABLE_COI === "1"
+  ? []
+  : [
+      {
+        source: "/(.*)",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+        ],
+      },
+    ];
+
 const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_FFMPEG_CORE_VERSION: FFMPEG_CORE_VERSION,
   },
   headers: async () => [
-    {
-      source: "/(.*)",
-      headers: [
-        { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-        { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
-      ],
-    },
+    ...COI_HEADERS,
     {
       // Versioned path → safe to cache for a year without revalidation.
       source: "/ffmpeg/:path*",
