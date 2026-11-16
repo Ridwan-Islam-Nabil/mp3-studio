@@ -21,7 +21,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24  # bundles npm 11, matching the npm that writes package-lock.json
           cache: npm
           cache-dependency-path: mp3-studio-web/package-lock.json
 
