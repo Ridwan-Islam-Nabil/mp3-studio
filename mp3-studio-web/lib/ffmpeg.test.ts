@@ -16,7 +16,10 @@ describe("lib/ffmpeg public API", () => {
     // jobs
     "exportAudio", "exportSegments", "detectSilence",
     // constants
-    "OUTPUT_FORMATS", "IPHONE_RINGTONE_MAX_SEC", "LOUDNORM_TARGET", "DEFAULT_SILENCE_OPTIONS",
+    "OUTPUT_FORMATS", "IPHONE_RINGTONE_MAX_SEC", "LOUDNORM_TARGET", "DEFAULT_SILENCE_OPTIONS", "LIMITER_CEILING_DB",
+    // fast normalize
+    "normalizeMode", "buildLoudnessMeasureArgs", "buildSegmentLoudnessMeasureArgs", "linearGainFilters",
+    "parseEbur128Summary", "parseR128Metadata", "normalizeGainDb",
   ])("exports %s", (name) => {
     expect(engine).toHaveProperty(name);
   });

@@ -93,8 +93,10 @@ mp3-studio-web/
 │   │   ├── formats.ts        ← OutputFormat, OUTPUT_FORMATS (ext/MIME/codec/muxer), encoderArgs,
 │   │   │                        IPHONE_RINGTONE_MAX_SEC
 │   │   ├── args.ts           ← ExportOptions, buildExportArgs, buildSegmentExportArgs,
-│   │   │                        buildSilenceDetectArgs, loudnorm/fade filters
+│   │   │                        buildSilenceDetectArgs, normalize (measure pass, gain + limiter,
+│   │   │                        loudnorm) and fade filters
 │   │   ├── silence.ts        ← parseSilenceLog, silencesToCuts, DEFAULT_SILENCE_OPTIONS
+│   │   ├── loudness.ts       ← parseEbur128Summary, parseR128Metadata, normalizeGainDb
 │   │   └── log.ts            ← parseLogTime, parseInputDuration, errorLines
 │   ├── analytics.ts          ← PostHog init + typed track*() helpers
 │   └── posts.ts              ← Blog post content (array of Post objects, HTML strings)
@@ -274,7 +276,8 @@ Import everything from `@/lib/ffmpeg`; it re-exports the pure modules in `lib/au
 **Layering:** `lib/audio/*` are pure (no FFmpeg instance, no DOM, no React) and unit-tested in
 Node. They decide *what* FFmpeg runs. `lib/ffmpeg.ts` owns the single FFmpeg instance and runs
 jobs. Jobs are queued (never interleave on the shared instance), each writes the input into the
-virtual FS, runs **one** `exec`, reads the outputs back and deletes every file. Call
+virtual FS once, runs **one** `exec` (two with fast `normalize`: measure, then export), reads the
+outputs back and deletes every file. Call
 `loadFFmpeg()` first (idempotent); after any failed job the instance is terminated and the next
 `loadFFmpeg()` reloads it.
 
@@ -282,7 +285,7 @@ virtual FS, runs **one** `exec`, reads the outputs back and deletes every file. 
 
 | Function | Returns | Notes |
 |---|---|---|
-| `exportAudio(file, cuts, duration, options?)` | `ExportResult { blob, format, mimeType, extension, durationSec }` | One output file. `options` = `ExportOptions` + `onProgress` |
+| `exportAudio(file, cuts, duration, options?)` | `ExportResult { blob, format, mimeType, extension, durationSec, loudness? }` | One output file. `options` = `ExportOptions` + `onProgress`. `loudness` = `{ measuredLufs, gainDb }`, only with fast normalize |
 | `trimAndExport(file, cuts, duration, onProgress?, options?)` | `Blob` | Original API (the editor uses it); wraps `exportAudio`. `blob.type` is the format's MIME type |
 | `exportSegments(file, cuts, duration, options?)` | `SegmentResult[]` (`ExportResult` + `fileName`, `index`, `start`, `end`) | One file per kept segment, named `<baseName>-01.<ext>`, `-02`, … (3 digits from 100 segments). `options.baseName` defaults to the source name without extension. Zipping is the caller's job |
 | `detectSilence(file, options?)` | `CutRegion[]` | `{ thresholdDb = -40, minSilenceSec = 0.7, paddingSec = 0.15, duration?, onProgress? }`. Cuts are padded, merged, clamped; ready to merge with user cuts or to show for review |
@@ -299,11 +302,13 @@ instance is kept).
 | `format` | `"mp3"` | `"mp3"` libmp3lame · `"wav"` pcm_s16le · `"m4a"` AAC in the `ipod` (MPEG-4) muxer · `"m4r"` same bytes as m4a, `.m4r` extension (iPhone ringtone). MIME: `audio/mpeg`, `audio/wav`, `audio/mp4`, `audio/mp4`. All outputs are 44.1 kHz; channels are kept. m4a/m4r get `-movflags +faststart` |
 | `quality` | `"standard"` | MP3: VBR `-q:a 2` (~190 kbps) / `"high"` `-q:a 0` (~245 kbps). AAC: 192 / 256 kbps CBR. WAV: ignored |
 | `bitrateKbps` | — | CBR, clamped 32–320, overrides `quality`. WAV: ignored |
-| `normalize` | `false` | Single-pass `loudnorm=I=-16:TP=-1.5:LRA=11` (`LOUDNORM_TARGET`) at the end of the graph, after the concat |
+| `normalize` | `false` | Target `LOUDNORM_TARGET` (-16 LUFS, -1.5 dBTP). `true` / `"fast"`: two passes — measure the kept audio with `ebur128`, then `volume=<-16 − measured>dB` + 2× oversampled `alimiter` (ceiling -2 dBFS) after the concat. `"loudnorm"`: the old single-pass `loudnorm=I=-16:TP=-1.5:LRA=11`, ~2.5× slower. See "Normalize" below |
 | `fade` | — | `{ inSec?, outSec? }` fade-in/out at the very start/end of the output file (after normalize). Scaled down proportionally if longer than the output. Positions use the expected output length (sum of kept segments) |
 
-`exportSegments` applies `normalize` and `fade` to **each file** separately, and adds a 12 ms
-de-click fade at every segment edge that was a cut point (not at the source's own start/end).
+`exportSegments` applies `normalize` and `fade` to **each file** separately (fast mode: one measure
+run with a meter per segment, so each file gets its own gain; `SegmentResult.loudness` per file),
+and adds a 12 ms de-click fade at every segment edge that was a cut point (not at the source's own
+start/end).
 
 ### Pure helpers
 
@@ -316,10 +321,23 @@ de-click fade at every segment edge that was a cut point (not at the source's ow
   `withExtension(name, format)`, `encoderArgs(format, options)`, `IPHONE_RINGTONE_MAX_SEC` (40 —
   iOS ignores longer ringtones; Android has no fixed limit; the engine does not enforce it),
   `AAC_BITRATE_KBPS`, `OUTPUT_SAMPLE_RATE`.
-- **Args** (`audio/args.ts`): `buildExportArgs(input, keep, duration, output, options)`,
-  `buildSegmentExportArgs(input, keep, duration, outputNames, options)`,
-  `buildSilenceDetectArgs(input, { thresholdDb, minSilenceSec })`, `outputFilters`,
-  `segmentFilters`, `loudnormFilter`, `segmentNumber`, `JOIN_FADE_SEC`, `EDGE_EPSILON_SEC`.
+- **Args** (`audio/args.ts`): `buildExportArgs(input, keep, duration, output, options, gainDb?)`,
+  `buildSegmentExportArgs(input, keep, duration, outputNames, options, gainsDb?)` (the gain
+  arguments are required in fast-normalize mode and throw without them),
+  `buildLoudnessMeasureArgs(input, keep, duration)` (fast normalize pass 1: the export's
+  atrim/fade/concat graph into `ebur128=framelog=verbose`, `-f null -`, no output fades),
+  `buildSegmentLoudnessMeasureArgs(input, keep, duration, metadataNames)` (one meter per segment,
+  each writing `ametadata=mode=print:key=lavfi.r128.I:file=<name>`),
+  `buildSilenceDetectArgs(input, { thresholdDb, minSilenceSec })`, `outputFilters(sec, options,
+  gainDb?)`, `normalizeMode(normalize)` (`true` → `"fast"`), `linearGainFilters(gainDb)`,
+  `segmentFilters`, `loudnormFilter`, `segmentNumber`, `JOIN_FADE_SEC`, `EDGE_EPSILON_SEC`,
+  `LOUDNORM_TARGET`, `LIMITER_CEILING_DB` (-2), `LIMITER_OVERSAMPLE_RATE` (88200).
+- **Loudness** (`audio/loudness.ts`): `parseEbur128Summary(log)` (integrated LUFS from the last
+  `Summary:` block; string or lines; works with and without the `[Parsed_ebur128_0 @ …]` prefix,
+  which the wasm core drops at some log levels; per-frame `I:` values are ignored; `-inf` →
+  -Infinity), `parseR128Metadata(text)` (last `lavfi.r128.I=` value of an ametadata file),
+  `normalizeGainDb(measured, target)` (target − measured, rounded to 0.01 dB; **0 for silence**:
+  ≤ `SILENCE_LUFS` (-70), -inf or NaN).
 - **Silence** (`audio/silence.ts`): `parseSilenceLog(log, duration?)` (string or lines; handles
   the wasm log format, where the `[silencedetect @ …]` prefix arrives as a separate event and the
   final `silence_end` comes after the statistics; a trailing unterminated silence closes at
@@ -344,10 +362,29 @@ de-click fade at every segment edge that was a cut point (not at the source's ow
   `mp4`, `ogg`, `flac`; filters `loudnorm`, `silencedetect`, `afade`, `atrim`, `asetpts`,
   `concat`, `aresample`. So FLAC/Opus/OGG/ALAC outputs could be added to `OUTPUT_FORMATS` without a
   new core.
-- **Normalize is single-pass `loudnorm` (dynamic mode)**, which upsamples to 192 kHz internally
-  for true-peak detection — that's why it's slow (below). A faster alternative if needed: measure
-  with `ebur128` (0.45 s for 3 min) then apply a linear `volume` + `alimiter` (1.4 s) ≈ 2 s total
-  instead of ~13 s; not implemented.
+- **Normalize defaults to two-pass linear ("fast").** Single-pass `loudnorm` (dynamic mode)
+  upsamples to 192 kHz internally for true-peak detection, which is what makes it slow. Fast mode
+  instead measures once and applies one constant gain, so the dynamics are kept (loudnorm also
+  rides the gain and squeezes the loudness range). Details that matter:
+  - The measure pass uses the **same** atrim/de-click/concat graph as the export, so it measures
+    exactly what gets encoded (before the output `fade`, like loudnorm). `ebur128` without
+    `peak=true` (true-peak metering would upsample too); `framelog=verbose` keeps the 10
+    lines/second of frame logging out of the log at info level.
+  - **Split export can't use the log**: with several meters the summaries are printed in
+    filter-graph teardown order (not segment order) and the wasm core sometimes drops the
+    `[Parsed_ebur128_N @ …]` prefix. Each meter therefore writes its own small text file via
+    `ametadata … file=loudness-NN.txt`, read back as a pass-1 output. The last reading matched
+    the summary within 0.05 LU.
+  - **Limiter:** `alimiter=limit=0.794328:level=disabled:latency=1` at 88.2 kHz. `level` is
+    alimiter's auto-level, **on by default** in FFmpeg 5.1 — it would scale the output back up
+    to 0 dBFS. `latency=1` compensates the 5 ms look-ahead (output length unchanged, checked).
+    Ceiling -2 dBFS = 0.5 dB under the -1.5 dBTP target for the overshoot of downsampling and
+    the lossy encoder. Measured on MP3 output (native FFmpeg 8, same filters): with 6 dB of gain
+    reduction, no oversampling reached -0.4 dBTP, 2× -1.0 dBTP, 4× -1.0 dBTP; in the browser 2×
+    costs +0.5 s and 4× +1.3 s for 3 minutes, hence 2×. Mild limiting lands around -1.6 to -2 dBTP.
+  - Silence (≤ -70 LUFS) gets gain 0 instead of +54 dB. There is no other gain cap: very quiet
+    material is boosted all the way to -16 LUFS and the limiter takes the peaks.
+  - Progress: the measure pass is weighted 1, the export pass 4 (0.45 s vs ~2 s).
 
 ### Measured performance
 
@@ -359,16 +396,43 @@ with native `ffprobe` / `ebur128`.
 |---|---|---|
 | `loadFFmpeg()` (core in HTTP cache of the dev server) | 1.3 s | |
 | MP3, 2 cuts → 160 s | 1.9–2.2 s | 160.000 s |
-| same + `normalize` | **13.3 s** (~6.5× slower) | -29.2 → **-16.2 LUFS**, true peak -8.6 dBFS |
-| MP3 whole file 180 s / + `normalize` | 2.3 s / 15.0 s | |
+| same + `normalize: "loudnorm"` | **13.3 s** (~6.5× slower) | -29.2 → **-16.2 LUFS**, true peak -8.6 dBFS |
+| MP3 whole file 180 s / + `"loudnorm"` | 2.3 s / 15.0 s | |
 | WAV 30 s clip | 0.18 s | pcm_s16le, 30.000 s |
 | M4A 30 s clip / 160 s | 0.87 s / 4.0 s (AAC ≈ 2× LAME) | aac 192 kbps, brand `M4A `, 30.000 s |
-| M4R ringtone 35 s, `normalize` + `fade {in 1, out 2}` | 2.7 s | 35.000 s, -16.3 LUFS, quiet first/last 0.4 s |
+| M4R ringtone 35 s, `"loudnorm"` + `fade {in 1, out 2}` | 2.7 s | 35.000 s, -16.3 LUFS, quiet first/last 0.4 s |
 | `detectSilence()` 180 s | 0.3–0.5 s | finds 30.02–33.02, 90.02–91.51, 177.0–180 (150.0–150.4 is below `minSilenceSec`) |
 | export with the silence cuts | | 173.42 s |
 | `exportSegments` 3 segments: one run vs one run per segment | 1.5–2.3 s vs 3.0 s | 30.172 / 57.303 / 85.796 s |
 | `exportSegments` 10 segments: one run vs one run per segment | 3.2 s vs 4.7 s | |
 | keep mode `keepToCuts([5–15, 100–110])` → export | | 20.000 s |
+
+The `"loudnorm"` rows above were measured when `normalize: true` still meant loudnorm.
+
+### Normalize: fast vs loudnorm (measured 2026-11-16)
+
+Headless Chromium (Playwright), `next dev`, a temporary dev page calling `exportAudio` /
+`exportSegments`. Files: a 180 s excerpt of a real music recording (320 kbps, 48 kHz, -15.7
+LUFS, peak -1.1 dBTP), the same excerpt 12 dB quieter (192 kbps, 44.1 kHz, -28.0 LUFS), and a
+synthetic tone + noise file (-41.3 LUFS). MP3 output; times are medians of 3 interleaved runs after
+a warm-up; loudness / true peak checked with native FFmpeg 8 `-af ebur128=peak=true`.
+
+| Export (MP3) | plain | `normalize: true` (fast) | `normalize: "loudnorm"` |
+|---|---|---|---|
+| quiet file, 2 cuts → 160 s | 1.4 s | **2.3 s** · -16.0 LUFS · -1.8 dBTP | 5.8 s · -15.4 LUFS · **-0.9 dBTP** |
+| quiet file, whole 180 s | 1.6 s | **2.5 s** · -15.9 LUFS · -1.9 dBTP | 6.4 s |
+| real file, 2 cuts → 160 s | 1.5 s | **2.3 s** · -15.9 LUFS · -1.6 dBTP | 5.7 s · -15.4 LUFS · -1.2 dBTP |
+| real file, whole 180 s | 1.5 s | **2.7 s** · -16.0 LUFS · -1.6 dBTP | 6.0 s |
+| synthetic -41 LUFS, 2 cuts (+25 dB gain) | 1.5 s | 2.9 s · -16.0 LUFS · -1.9 dBTP | 6.5 s · -16.0 LUFS · -1.4 dBTP |
+
+- Pass 1 alone (ebur128 measure) took 0.45–0.5 s; the oversampled limiter adds ~0.5 s to the
+  export pass. Output durations are identical to the plain export.
+- `exportSegments`, 3 segments of the quiet file, fast: 2.5 s (loudnorm 5.1 s); each file
+  -16.0 LUFS, true peak -1.5 / -1.7 / -3.7 dBTP, per-segment gains 13.1 / 12.4 / 10.7 dB.
+- WAV 60 s clip: -16.0 LUFS, -2.3 dBTP. M4R 35 s + `fade {in 1, out 2}`: -16.3 LUFS (the fades
+  lower it slightly), -1.6 dBTP, 35.000 s. 10 s of digital silence: gain 0, output stays silent.
+- loudnorm took ~6 s here, not the 13 s in the table above (different test file and run); either
+  way fast mode is 2.3–2.7 s, about 0.9 s more than a plain export.
 
 ---
 
@@ -670,7 +734,8 @@ The COOP/COEP headers from `next.config.ts` apply in development too (unless bui
   dates), `lib/audio/*.test.ts` (`regions.test.ts`: `invertRegions`, mirroring the Python tests
   of the local app, and the `keepToCuts` round trip; `args.test.ts`: filter graphs and args per
   format / normalize / fade / split; `formats.test.ts`; `silence.test.ts`: silencedetect logs
-  captured from the wasm core and native FFmpeg; `log.test.ts`), `lib/ffmpeg.test.ts` (public
+  captured from the wasm core and native FFmpeg; `loudness.test.ts`: ebur128 summaries and
+  `ametadata` files captured the same way, gain rules; `log.test.ts`), `lib/ffmpeg.test.ts` (public
   API surface of the entry point),
   `components/editor/history.test.ts` (undo/redo reducer: push drops the redo branch, undo/redo
   at the ends are no-ops, reset, clear, load, immutability), `components/editor/editorUtils.test.ts`
